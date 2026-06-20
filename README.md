@@ -75,6 +75,16 @@ Convert PyTorch weights to a NumPy file for the later runtime path:
 PYTHONPATH=src python3 -m tiny_invoker convert-weights roneneldan/TinyStories-33M
 ```
 
+Probe the NumPy GPT-Neo runtime skeleton:
+
+```bash
+python3 -m pip install '.[runtime]'
+PYTHONPATH=src python3 -m tiny_invoker probe-gpt-neo roneneldan/TinyStories-33M "Once upon a time"
+```
+
+`probe-gpt-neo` currently verifies tokenizer/config/NumPy-weight wiring and
+logits shape. Transformer attention and MLP blocks are added in later steps.
+
 To see each generation step:
 
 ```bash
@@ -92,6 +102,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 - `src/tiny_invoker/tokenizer.py`: turns text into token ids and back.
 - `src/tiny_invoker/hf.py`: inspects Hugging Face model metadata and caches model files.
 - `src/tiny_invoker/weights.py`: inspects PyTorch weight names, shapes, and dtypes.
+- `src/tiny_invoker/gpt_neo.py`: loads GPT-Neo config and NumPy weights for the runtime path.
 - `src/tiny_invoker/interfaces.py`: defines the minimum model interface.
 - `src/tiny_invoker/model.py`: a tiny bigram language model.
 - `src/tiny_invoker/sampler.py`: softmax, top-k filtering, and token sampling.

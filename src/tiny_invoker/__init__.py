@@ -2,6 +2,7 @@
 
 from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig, GenerationResult, GenerationStep, InferenceEngine
+from tiny_invoker.gpt_neo import NumpyGptNeoCache, NumpyGptNeoConfig, NumpyGptNeoLanguageModel
 from tiny_invoker.hf import HfModelInfo, download_model_file, fetch_model_info
 from tiny_invoker.interfaces import ForwardInput, ForwardMode, ForwardOutput, KVCache, LanguageModel
 from tiny_invoker.model import BigramKVCache, BigramLanguageModel
@@ -28,6 +29,9 @@ __all__ = [
     "InferenceEngine",
     "KVCache",
     "LanguageModel",
+    "NumpyGptNeoCache",
+    "NumpyGptNeoConfig",
+    "NumpyGptNeoLanguageModel",
     "TextTokenizer",
     "WeightManifest",
     "WeightTensorInfo",

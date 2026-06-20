@@ -6,7 +6,9 @@ import sys
 
 from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig
-from tiny_invoker.hf import download_model_file, fetch_model_info
+from tiny_invoker.gpt_neo import NumpyGptNeoLanguageModel
+from tiny_invoker.hf import download_model_file, fetch_model_info, model_cache_dir
+from tiny_invoker.interfaces import ForwardInput, ForwardMode
 from tiny_invoker.tokenizer import HfTokenizer
 from tiny_invoker.weights import convert_torch_weights_to_npz, load_torch_weight_manifest
 
@@ -75,6 +77,22 @@ def build_convert_weights_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--uncompressed", action="store_true", help="Use np.savez instead of np.savez_compressed.")
     parser.add_argument("--limit", type=int, default=20, help="Maximum converted tensor lines to print. Use 0 for all.")
+    return parser
+
+
+def build_probe_gpt_neo_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker probe-gpt-neo",
+        description="Run the NumPy GPT-Neo runtime skeleton and print logits metadata.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example roneneldan/TinyStories-33M.")
+    parser.add_argument("prompt", help="Prompt text to tokenize and run through the runtime skeleton.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--weights-file", default="pytorch_model.npz")
+    parser.add_argument("--weights-path", type=Path, default=None)
+    parser.add_argument("--config-file", default="config.json")
     return parser
 
 
@@ -191,6 +209,62 @@ def run_convert_weights(argv: list[str]) -> int:
     return 0
 
 
+def run_probe_gpt_neo(argv: list[str]) -> int:
+    parser = build_probe_gpt_neo_parser()
+    args = parser.parse_args(argv)
+
+    config_path = download_model_file(
+        args.model_id,
+        args.config_file,
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+    )
+    tokenizer_path = download_model_file(
+        args.model_id,
+        "tokenizer.json",
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+    )
+    weights_path = args.weights_path
+    if weights_path is None:
+        weights_path = model_cache_dir(
+            args.model_id,
+            revision=args.revision,
+            cache_dir=args.cache_dir,
+        ) / args.weights_file
+    if not weights_path.exists():
+        raise SystemExit(
+            f"Missing NumPy weights file: {weights_path}\n"
+            "Run `tiny-invoker convert-weights <model_id>` first."
+        )
+
+    tokenizer = HfTokenizer.from_file(tokenizer_path)
+    model = NumpyGptNeoLanguageModel.from_files(
+        config_path=config_path,
+        weights_path=weights_path,
+        tokenizer=tokenizer,
+    )
+    token_ids = tokenizer.encode(args.prompt)
+    output = model.forward(
+        ForwardInput(
+            token_ids=token_ids,
+            mode=ForwardMode.PREFILL,
+        )
+    )
+    logits = output.logits
+    print(f"config_file: {config_path}")
+    print(f"weights_file: {weights_path}")
+    print(f"prompt_token_ids: {' '.join(str(token_id) for token_id in token_ids)}")
+    print(f"logits_size: {len(logits)}")
+    print(f"cache_tokens: {len(output.cache.token_ids)}")
+    top_id = max(range(len(logits)), key=lambda token_id: logits[token_id])
+    print(f"top_token_id: {top_id}")
+    print(f"top_token_text: {tokenizer.decode([top_id])!r}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "inspect-model":
@@ -201,4 +275,6 @@ def main(argv: list[str] | None = None) -> int:
         return run_inspect_weights(args[1:])
     if args and args[0] == "convert-weights":
         return run_convert_weights(args[1:])
+    if args and args[0] == "probe-gpt-neo":
+        return run_probe_gpt_neo(args[1:])
     return run_generate(args)
