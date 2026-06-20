@@ -115,12 +115,18 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
         self.assertEqual(len(prefill.logits), tokenizer.vocab_size)
         self.assertEqual(prefill.logits.shape, (tokenizer.vocab_size,))
         self.assertEqual(prefill.cache.token_ids, tokenizer.encode("a"))
+        self.assertEqual(prefill.cache.length, 1)
+        self.assertEqual(prefill.cache.capacity, 8)
         self.assertEqual(len(prefill.cache.keys), 1)
-        self.assertEqual(prefill.cache.keys[0].shape, (1, 1, 3))
-        self.assertEqual(prefill.cache.values[0].shape, (1, 1, 3))
+        self.assertEqual(prefill.cache.keys[0].shape, (1, 8, 3))
+        self.assertEqual(prefill.cache.values[0].shape, (1, 8, 3))
         self.assertEqual(decode.cache.token_ids, tokenizer.encode("ab"))
-        self.assertEqual(decode.cache.keys[0].shape, (1, 2, 3))
-        self.assertEqual(decode.cache.values[0].shape, (1, 2, 3))
+        self.assertEqual(decode.cache.length, 2)
+        self.assertEqual(decode.cache.capacity, 8)
+        self.assertEqual(decode.cache.keys[0].shape, (1, 8, 3))
+        self.assertEqual(decode.cache.values[0].shape, (1, 8, 3))
+        self.assertIs(decode.cache.keys[0], prefill.cache.keys[0])
+        self.assertIs(decode.cache.values[0], prefill.cache.values[0])
 
 
 if __name__ == "__main__":

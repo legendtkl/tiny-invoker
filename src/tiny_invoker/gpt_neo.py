@@ -89,6 +89,16 @@ class NumpyGptNeoCache:
     keys: tuple[Any, ...]
     values: tuple[Any, ...]
 
+    @property
+    def length(self) -> int:
+        return len(self.token_ids)
+
+    @property
+    def capacity(self) -> int:
+        if not self.keys:
+            return self.length
+        return int(self.keys[0].shape[1])
+
 
 @dataclass
 class NumpyGptNeoLanguageModel:

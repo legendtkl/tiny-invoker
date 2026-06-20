@@ -190,10 +190,21 @@ class DecoderOnlyTransformer:
             linear(hidden_states, attention_weights.v_proj_weight),
             self.config.num_heads,
         )
-        if past_key is not None:
-            key = np.concatenate([past_key, key], axis=1)
-        if past_value is not None:
-            value = np.concatenate([past_value, value], axis=1)
+        end_position = start_position + hidden_states.shape[0]
+        key_cache = self._updated_kv_cache(
+            past_cache=past_key,
+            new_values=key,
+            start_position=start_position,
+            end_position=end_position,
+        )
+        value_cache = self._updated_kv_cache(
+            past_cache=past_value,
+            new_values=value,
+            start_position=start_position,
+            end_position=end_position,
+        )
+        key = key_cache[:, :end_position, :]
+        value = value_cache[:, :end_position, :]
 
         scores = (query @ np.swapaxes(key, -1, -2)) / np.sqrt(self.config.head_dim)
         mask = self._attention_mask(
@@ -211,7 +222,40 @@ class DecoderOnlyTransformer:
             attention_weights.out_proj_weight,
             attention_weights.out_proj_bias,
         )
-        return output, key, value
+        return output, key_cache, value_cache
+
+    def _updated_kv_cache(
+        self,
+        past_cache: Any | None,
+        new_values: Any,
+        start_position: int,
+        end_position: int,
+    ) -> Any:
+        np = require_numpy()
+        if past_cache is None:
+            cache = np.empty(
+                (
+                    new_values.shape[0],
+                    self.config.max_position_embeddings,
+                    new_values.shape[2],
+                ),
+                dtype=new_values.dtype,
+            )
+        elif past_cache.shape[1] >= end_position:
+            cache = past_cache
+        else:
+            cache = np.empty(
+                (
+                    past_cache.shape[0],
+                    self.config.max_position_embeddings,
+                    past_cache.shape[2],
+                ),
+                dtype=past_cache.dtype,
+            )
+            cache[:, :start_position, :] = past_cache[:, :start_position, :]
+
+        cache[:, start_position:end_position, :] = new_values
+        return cache
 
     def _attention_mask(
         self,

@@ -136,6 +136,15 @@ During prefill, the model computes K/V for every prompt token.
 During decode, the model computes K/V only for the new token and reuses the
 cached history.
 
+当前实现使用预分配 cache buffer：cache tensor 的第二维是容量，只有
+`cache.length` 对应的前缀是有效历史。decode 时会把新 token 的 K/V 写入
+`start_position:end_position`，避免每一步都复制历史 K/V。
+
+The current implementation uses preallocated cache buffers: the second tensor
+dimension is capacity, and only the prefix described by `cache.length` is valid.
+During decode, the new token's K/V is written into `start_position:end_position`,
+avoiding repeated copies of historical K/V on every step.
+
 ## 图 4：Prefill vs Decode / Figure 4: Prefill vs Decode
 
 ```mermaid
