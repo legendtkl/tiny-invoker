@@ -113,6 +113,7 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
             )
 
         self.assertEqual(len(prefill.logits), tokenizer.vocab_size)
+        self.assertEqual(prefill.logits.shape, (tokenizer.vocab_size,))
         self.assertEqual(prefill.cache.token_ids, tokenizer.encode("a"))
         self.assertEqual(len(prefill.cache.keys), 1)
         self.assertEqual(prefill.cache.keys[0].shape, (1, 1, 3))

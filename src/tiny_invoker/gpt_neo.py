@@ -179,7 +179,7 @@ class NumpyGptNeoLanguageModel:
             past_values=None,
         )
         return ForwardOutput(
-            logits=logits.tolist(),
+            logits=logits,
             cache=NumpyGptNeoCache(token_ids=context_token_ids, keys=keys, values=values),
         )
 
@@ -197,7 +197,7 @@ class NumpyGptNeoLanguageModel:
             past_values=request.cache.values,
         )
         return ForwardOutput(
-            logits=logits.tolist(),
+            logits=logits,
             cache=NumpyGptNeoCache(
                 token_ids=request.cache.token_ids + request.token_ids,
                 keys=keys,

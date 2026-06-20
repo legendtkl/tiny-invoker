@@ -62,14 +62,12 @@ class InferenceEngine:
         cache = prefill_output.cache
 
         for step in range(config.max_new_tokens):
-            for token_id in tokenizer.special_token_ids:
-                logits[token_id] = float("-inf")
-
             chosen_id = choose_token(
                 logits,
                 rng=rng,
                 temperature=config.temperature,
                 top_k=config.top_k,
+                blocked_token_ids=tokenizer.special_token_ids,
             )
             context_token_ids.append(chosen_id)
             generated_token_ids.append(chosen_id)
@@ -82,6 +80,7 @@ class InferenceEngine:
                         logits,
                         temperature=max(config.temperature, 1e-12),
                         top_k=config.top_k,
+                        blocked_token_ids=tokenizer.special_token_ids,
                     )
                 ]
                 steps.append(

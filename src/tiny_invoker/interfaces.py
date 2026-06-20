@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Any, Protocol
 
 from tiny_invoker.tokenizer import TextTokenizer
 
@@ -25,7 +25,7 @@ class ForwardInput:
 
 @dataclass(frozen=True)
 class ForwardOutput:
-    logits: list[float]
+    logits: Any
     cache: KVCache
 
 
