@@ -18,6 +18,16 @@ from tiny_invoker.tokenizer import HfTokenizer
 from tiny_invoker.weights import convert_torch_weights_to_npz, load_torch_weight_manifest
 
 
+PROFILE_METRIC_NAMES = (
+    "embedding_ms",
+    "blocks_ms",
+    "attention_ms",
+    "mlp_ms",
+    "final_norm_ms",
+    "lm_head_ms",
+)
+
+
 def build_generate_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the tiny learning-oriented inference engine.",
@@ -159,6 +169,7 @@ def build_bench_gpt_neo_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--sample-chars", type=int, default=500)
+    parser.add_argument("--profile", action="store_true", help="Print internal prefill/decode forward timing.")
     return parser
 
 
@@ -409,6 +420,7 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
             temperature=args.temperature,
             top_k=top_k,
             seed=args.seed,
+            profile=args.profile,
         )
         run_end_to_end_gpt_neo_benchmark(
             engine=engine,
@@ -428,6 +440,7 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
             temperature=args.temperature,
             top_k=top_k,
             seed=args.seed,
+            profile=args.profile,
         )
         for _ in range(args.repeats)
     ]
@@ -452,10 +465,16 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
     print(f"top_k: {top_k}")
     print(f"repeats: {args.repeats}")
     print(f"warmups: {args.warmups}")
+    print(f"profile: {args.profile}")
     print(f"model_load_ms_excluded: {load_ms:.2f}")
     print_benchmark_metric("prefill_ms", segmented_rows)
     print_benchmark_metric("decode_forward_ms", segmented_rows)
     print_benchmark_metric("sampler_with_mask_ms", segmented_rows)
+    if args.profile:
+        for metric_name in PROFILE_METRIC_NAMES:
+            print_benchmark_metric(f"profile_prefill_{metric_name}", segmented_rows)
+        for metric_name in PROFILE_METRIC_NAMES:
+            print_benchmark_metric(f"profile_decode_{metric_name}", segmented_rows)
     print_benchmark_metric("end_to_end_ms", end_to_end_rows)
     print_benchmark_metric("end_to_end_tokens_per_second", end_to_end_rows)
     if args.sample_chars > 0 and end_to_end_rows:
@@ -476,14 +495,17 @@ def run_segmented_gpt_neo_benchmark(
     temperature: float,
     top_k: int | None,
     seed: int | None,
+    profile: bool = False,
 ) -> dict[str, float | str]:
     rng = random.Random(seed)
     prefill_start = time.perf_counter()
-    output = model.forward(
+    output, prefill_profile = run_profiled_forward(
+        model,
         ForwardInput(
             token_ids=prompt_token_ids,
             mode=ForwardMode.PREFILL,
-        )
+        ),
+        profile=profile,
     )
     prefill_ms = elapsed_ms(prefill_start)
 
@@ -491,6 +513,7 @@ def run_segmented_gpt_neo_benchmark(
     cache = output.cache
     sampler_ms: list[float] = []
     decode_ms: list[float] = []
+    decode_profiles: list[dict[str, float]] = []
     generated_token_ids: list[int] = []
     for step in range(max_new_tokens):
         sample_start = time.perf_counter()
@@ -506,23 +529,43 @@ def run_segmented_gpt_neo_benchmark(
 
         if step < max_new_tokens - 1:
             decode_start = time.perf_counter()
-            output = model.forward(
+            output, decode_profile = run_profiled_forward(
+                model,
                 ForwardInput(
                     token_ids=[token_id],
                     mode=ForwardMode.DECODE,
                     cache=cache,
-                )
+                ),
+                profile=profile,
             )
             decode_ms.append(elapsed_ms(decode_start))
+            if profile:
+                decode_profiles.append(decode_profile)
             logits = output.logits
             cache = output.cache
 
-    return {
+    row: dict[str, float | str] = {
         "prefill_ms": prefill_ms,
         "decode_forward_ms": mean(decode_ms) if decode_ms else 0.0,
         "sampler_with_mask_ms": mean(sampler_ms) if sampler_ms else 0.0,
         "text": tokenizer.decode(generated_token_ids),
     }
+    if profile:
+        for metric_name in PROFILE_METRIC_NAMES:
+            row[f"profile_prefill_{metric_name}"] = prefill_profile.get(metric_name, 0.0)
+            decode_values = [profile_row.get(metric_name, 0.0) for profile_row in decode_profiles]
+            row[f"profile_decode_{metric_name}"] = mean(decode_values) if decode_values else 0.0
+    return row
+
+
+def run_profiled_forward(
+    model: NumpyGptNeoLanguageModel,
+    request: ForwardInput,
+    profile: bool,
+) -> tuple[Any, dict[str, float]]:
+    if profile:
+        return model.profile_forward(request)
+    return model.forward(request), {}
 
 
 def run_end_to_end_gpt_neo_benchmark(

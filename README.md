@@ -97,8 +97,12 @@ PYTHONPATH=src python3 -m tiny_invoker generate-gpt-neo roneneldan/TinyStories-3
 Benchmark the NumPy GPT-Neo runtime:
 
 ```bash
-PYTHONPATH=src python3 -m tiny_invoker bench-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --max-new-tokens 128 --temperature 0 --top-k 20
+PYTHONPATH=src python3 -m tiny_invoker bench-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --max-new-tokens 128 --temperature 0 --top-k 20 --profile
 ```
+
+With `--profile`, the benchmark also prints internal prefill and per-token
+decode timing for embedding, Transformer blocks, attention, MLP, final norm,
+and LM head.
 
 Serve the NumPy GPT-Neo runtime locally:
 
@@ -113,7 +117,9 @@ The GPT-Neo runtime now uses a small decoder-only Transformer backbone. GPT-Neo
 specific code maps Hugging Face config and weight names into that backbone, while
 the shared Transformer code runs embedding, attention, MLP, residual paths, final
 norm, LM head, and per-layer K/V cache for a single request on CPU. It is built
-for learning, not vLLM/SGLang-style batching or optimized serving yet.
+for learning, not vLLM/SGLang-style batching or optimized serving yet. The hot
+path caches transposed linear weights and exposes optional profiling so decode
+performance work has a repeatable baseline.
 
 To see each generation step:
 

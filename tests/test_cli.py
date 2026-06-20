@@ -16,6 +16,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.top_k, 20)
         self.assertEqual(args.repeats, 2)
         self.assertEqual(args.warmups, 1)
+        self.assertFalse(args.profile)
+
+    def test_bench_gpt_neo_parser_accepts_profile(self) -> None:
+        parser = build_bench_gpt_neo_parser()
+
+        args = parser.parse_args(["roneneldan/TinyStories-33M", "Once upon a time", "--profile"])
+
+        self.assertTrue(args.profile)
 
 
 if __name__ == "__main__":

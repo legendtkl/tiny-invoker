@@ -98,6 +98,10 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
                 tokenizer=tokenizer,
             )
             self.assertIsInstance(model.transformer, DecoderOnlyTransformer)
+            self.assertEqual(
+                model.transformer.weights.lm_head_weight_t.shape,
+                (3, tokenizer.vocab_size),
+            )
             self.assertIsNone(
                 model.transformer._attention_mask(
                     query_length=1,
@@ -111,6 +115,12 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
                 key_length=11,
                 start_position=10,
                 attention_type="local",
+            )
+            profiled_prefill, profile = model.profile_forward(
+                ForwardInput(
+                    token_ids=tokenizer.encode("a"),
+                    mode=ForwardMode.PREFILL,
+                )
             )
             prefill = model.forward(
                 ForwardInput(
@@ -130,6 +140,10 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
             local_decode_mask.tolist(),
             [[False, False, False, True, True, True, True, True, True, True, True]],
         )
+        self.assertEqual(profiled_prefill.logits.shape, (tokenizer.vocab_size,))
+        self.assertIn("attention_ms", profile)
+        self.assertIn("mlp_ms", profile)
+        self.assertIn("lm_head_ms", profile)
         self.assertEqual(len(prefill.logits), tokenizer.vocab_size)
         self.assertEqual(prefill.logits.shape, (tokenizer.vocab_size,))
         self.assertEqual(prefill.cache.token_ids, tokenizer.encode("a"))

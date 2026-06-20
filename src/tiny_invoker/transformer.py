@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,18 +37,18 @@ class TransformerConfig:
 
 @dataclass(frozen=True)
 class AttentionWeights:
-    q_proj_weight: Any
-    k_proj_weight: Any
-    v_proj_weight: Any
-    out_proj_weight: Any
+    q_proj_weight_t: Any
+    k_proj_weight_t: Any
+    v_proj_weight_t: Any
+    out_proj_weight_t: Any
     out_proj_bias: Any | None
 
 
 @dataclass(frozen=True)
 class MlpWeights:
-    fc_weight: Any
+    fc_weight_t: Any
     fc_bias: Any
-    proj_weight: Any
+    proj_weight_t: Any
     proj_bias: Any
 
 
@@ -70,6 +71,7 @@ class TransformerWeights:
     final_norm_weight: Any
     final_norm_bias: Any
     lm_head_weight: Any | None = None
+    lm_head_weight_t: Any | None = None
 
 
 @dataclass
@@ -83,6 +85,7 @@ class DecoderOnlyTransformer:
         start_position: int,
         past_keys: tuple[Any, ...] | None,
         past_values: tuple[Any, ...] | None,
+        profile: dict[str, float] | None = None,
     ) -> tuple[Any, tuple[Any, ...], tuple[Any, ...]]:
         np = require_numpy()
         token_array = np.asarray(token_ids, dtype=np.int64)
@@ -96,24 +99,40 @@ class DecoderOnlyTransformer:
                 f"{self.config.max_position_embeddings}."
             )
 
+        timer = profile_start(profile)
         hidden_states = self._embed_tokens(token_array, start_position, end_position)
+        profile_add(profile, "embedding_ms", timer)
+
+        timer = profile_start(profile)
         hidden_states, keys, values = self._run_blocks(
             hidden_states,
             start_position=start_position,
             past_keys=past_keys,
             past_values=past_values,
+            profile=profile,
         )
+        profile_add(profile, "blocks_ms", timer)
+
+        timer = profile_start(profile)
         hidden_states = layer_norm(
             hidden_states,
             self.weights.final_norm_weight,
             self.weights.final_norm_bias,
             epsilon=self.config.layer_norm_epsilon,
         )
+        profile_add(profile, "final_norm_ms", timer)
+
         last_hidden = hidden_states[-1]
-        lm_head_weight = self.weights.lm_head_weight
-        if lm_head_weight is None:
-            lm_head_weight = self.weights.token_embedding
-        logits = last_hidden @ lm_head_weight.T
+        lm_head_weight_t = self.weights.lm_head_weight_t
+        if lm_head_weight_t is None:
+            lm_head_weight = self.weights.lm_head_weight
+            if lm_head_weight is None:
+                lm_head_weight = self.weights.token_embedding
+            lm_head_weight_t = lm_head_weight.T
+
+        timer = profile_start(profile)
+        logits = last_hidden @ lm_head_weight_t
+        profile_add(profile, "lm_head_ms", timer)
         return logits, keys, values
 
     def _embed_tokens(self, token_array: Any, start_position: int, end_position: int) -> Any:
@@ -132,6 +151,7 @@ class DecoderOnlyTransformer:
         start_position: int,
         past_keys: tuple[Any, ...] | None,
         past_values: tuple[Any, ...] | None,
+        profile: dict[str, float] | None = None,
     ) -> tuple[Any, tuple[Any, ...], tuple[Any, ...]]:
         next_keys: list[Any] = []
         next_values: list[Any] = []
@@ -145,6 +165,7 @@ class DecoderOnlyTransformer:
             )
             layer_past_key = None if past_keys is None else past_keys[layer_idx]
             layer_past_value = None if past_values is None else past_values[layer_idx]
+            timer = profile_start(profile)
             attn_output, key, value = self._self_attention(
                 layer_idx=layer_idx,
                 layer_weights=layer_weights,
@@ -153,6 +174,7 @@ class DecoderOnlyTransformer:
                 past_key=layer_past_key,
                 past_value=layer_past_value,
             )
+            profile_add(profile, "attention_ms", timer)
             hidden_states = residual + attn_output
 
             residual = hidden_states
@@ -162,7 +184,10 @@ class DecoderOnlyTransformer:
                 layer_weights.ln_2_bias,
                 epsilon=self.config.layer_norm_epsilon,
             )
-            hidden_states = residual + self._mlp(layer_weights.mlp, mlp_input)
+            timer = profile_start(profile)
+            mlp_output = self._mlp(layer_weights.mlp, mlp_input)
+            profile_add(profile, "mlp_ms", timer)
+            hidden_states = residual + mlp_output
             next_keys.append(key)
             next_values.append(value)
         return hidden_states, tuple(next_keys), tuple(next_values)
@@ -179,15 +204,15 @@ class DecoderOnlyTransformer:
         np = require_numpy()
         attention_weights = layer_weights.attention
         query = split_heads(
-            linear(hidden_states, attention_weights.q_proj_weight),
+            linear_t(hidden_states, attention_weights.q_proj_weight_t),
             self.config.num_heads,
         )
         key = split_heads(
-            linear(hidden_states, attention_weights.k_proj_weight),
+            linear_t(hidden_states, attention_weights.k_proj_weight_t),
             self.config.num_heads,
         )
         value = split_heads(
-            linear(hidden_states, attention_weights.v_proj_weight),
+            linear_t(hidden_states, attention_weights.v_proj_weight_t),
             self.config.num_heads,
         )
         end_position = start_position + hidden_states.shape[0]
@@ -218,9 +243,9 @@ class DecoderOnlyTransformer:
         probabilities = softmax(scores, axis=-1)
         context = probabilities @ value
         merged_context = merge_heads(context)
-        output = linear(
+        output = linear_t(
             merged_context,
-            attention_weights.out_proj_weight,
+            attention_weights.out_proj_weight_t,
             attention_weights.out_proj_bias,
         )
         return output, key_cache, value_cache
@@ -282,9 +307,9 @@ class DecoderOnlyTransformer:
         return mask
 
     def _mlp(self, weights: MlpWeights, hidden_states: Any) -> Any:
-        hidden_states = linear(hidden_states, weights.fc_weight, weights.fc_bias)
+        hidden_states = linear_t(hidden_states, weights.fc_weight_t, weights.fc_bias)
         hidden_states = self._activate(hidden_states)
-        return linear(hidden_states, weights.proj_weight, weights.proj_bias)
+        return linear_t(hidden_states, weights.proj_weight_t, weights.proj_bias)
 
     def _activate(self, hidden_states: Any) -> Any:
         if self.config.activation == "gelu_new":
@@ -292,11 +317,30 @@ class DecoderOnlyTransformer:
         raise ValueError(f"Unsupported activation: {self.config.activation}.")
 
 
+def linear_t(hidden_states: Any, weight_t: Any, bias: Any | None = None) -> Any:
+    output = hidden_states @ weight_t
+    if bias is not None:
+        output = output + bias
+    return output
+
+
 def linear(hidden_states: Any, weight: Any, bias: Any | None = None) -> Any:
     output = hidden_states @ weight.T
     if bias is not None:
         output = output + bias
     return output
+
+
+def profile_start(profile: dict[str, float] | None) -> float:
+    if profile is None:
+        return 0.0
+    return time.perf_counter()
+
+
+def profile_add(profile: dict[str, float] | None, name: str, start_time: float) -> None:
+    if profile is None:
+        return
+    profile[name] = profile.get(name, 0.0) + (time.perf_counter() - start_time) * 1000.0
 
 
 def gelu_new(hidden_states: Any) -> Any:

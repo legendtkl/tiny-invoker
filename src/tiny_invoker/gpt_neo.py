@@ -180,20 +180,37 @@ class NumpyGptNeoLanguageModel:
             return self._forward_decode(request)
         raise ValueError(f"Unsupported forward mode: {request.mode}.")
 
-    def _forward_prefill(self, token_ids: list[int]) -> ForwardOutput:
+    def profile_forward(self, request: ForwardInput) -> tuple[ForwardOutput, dict[str, float]]:
+        profile: dict[str, float] = {}
+        if request.mode == ForwardMode.PREFILL:
+            return self._forward_prefill(request.token_ids, profile=profile), profile
+        if request.mode == ForwardMode.DECODE:
+            return self._forward_decode(request, profile=profile), profile
+        raise ValueError(f"Unsupported forward mode: {request.mode}.")
+
+    def _forward_prefill(
+        self,
+        token_ids: list[int],
+        profile: dict[str, float] | None = None,
+    ) -> ForwardOutput:
         context_token_ids = token_ids[:] or [self.tokenizer.bos_id]
         logits, keys, values = self._compute_logits(
             context_token_ids,
             start_position=0,
             past_keys=None,
             past_values=None,
+            profile=profile,
         )
         return ForwardOutput(
             logits=logits,
             cache=NumpyGptNeoCache(token_ids=context_token_ids, keys=keys, values=values),
         )
 
-    def _forward_decode(self, request: ForwardInput) -> ForwardOutput:
+    def _forward_decode(
+        self,
+        request: ForwardInput,
+        profile: dict[str, float] | None = None,
+    ) -> ForwardOutput:
         if len(request.token_ids) != 1:
             raise ValueError("GPT-Neo decode mode expects exactly one token id.")
         if not isinstance(request.cache, NumpyGptNeoCache):
@@ -205,6 +222,7 @@ class NumpyGptNeoLanguageModel:
             start_position=start_position,
             past_keys=request.cache.keys,
             past_values=request.cache.values,
+            profile=profile,
         )
         return ForwardOutput(
             logits=logits,
@@ -221,6 +239,7 @@ class NumpyGptNeoLanguageModel:
         start_position: int,
         past_keys: tuple[Any, ...] | None,
         past_values: tuple[Any, ...] | None,
+        profile: dict[str, float] | None = None,
     ) -> tuple[Any, tuple[Any, ...], tuple[Any, ...]]:
         transformer = self.transformer
         if transformer is None:
@@ -232,6 +251,7 @@ class NumpyGptNeoLanguageModel:
             start_position=start_position,
             past_keys=past_keys,
             past_values=past_values,
+            profile=profile,
         )
 
 
@@ -253,18 +273,18 @@ def build_gpt_neo_transformer_weights(config: NumpyGptNeoConfig, weights: Any) -
                 ln_1_weight=weights[f"{prefix}.ln_1.weight"],
                 ln_1_bias=weights[f"{prefix}.ln_1.bias"],
                 attention=AttentionWeights(
-                    q_proj_weight=weights[f"{attention_prefix}.q_proj.weight"],
-                    k_proj_weight=weights[f"{attention_prefix}.k_proj.weight"],
-                    v_proj_weight=weights[f"{attention_prefix}.v_proj.weight"],
-                    out_proj_weight=weights[f"{attention_prefix}.out_proj.weight"],
+                    q_proj_weight_t=weight_t(weights[f"{attention_prefix}.q_proj.weight"]),
+                    k_proj_weight_t=weight_t(weights[f"{attention_prefix}.k_proj.weight"]),
+                    v_proj_weight_t=weight_t(weights[f"{attention_prefix}.v_proj.weight"]),
+                    out_proj_weight_t=weight_t(weights[f"{attention_prefix}.out_proj.weight"]),
                     out_proj_bias=weights[f"{attention_prefix}.out_proj.bias"],
                 ),
                 ln_2_weight=weights[f"{prefix}.ln_2.weight"],
                 ln_2_bias=weights[f"{prefix}.ln_2.bias"],
                 mlp=MlpWeights(
-                    fc_weight=weights[f"{mlp_prefix}.c_fc.weight"],
+                    fc_weight_t=weight_t(weights[f"{mlp_prefix}.c_fc.weight"]),
                     fc_bias=weights[f"{mlp_prefix}.c_fc.bias"],
-                    proj_weight=weights[f"{mlp_prefix}.c_proj.weight"],
+                    proj_weight_t=weight_t(weights[f"{mlp_prefix}.c_proj.weight"]),
                     proj_bias=weights[f"{mlp_prefix}.c_proj.bias"],
                 ),
                 attention_type=gpt_neo_attention_type(config, layer_idx),
@@ -279,6 +299,7 @@ def build_gpt_neo_transformer_weights(config: NumpyGptNeoConfig, weights: Any) -
         final_norm_weight=weights["transformer.ln_f.weight"],
         final_norm_bias=weights["transformer.ln_f.bias"],
         lm_head_weight=token_embedding,
+        lm_head_weight_t=weight_t(token_embedding, contiguous=True),
     )
 
 
@@ -286,6 +307,14 @@ def gpt_neo_attention_type(config: NumpyGptNeoConfig, layer_idx: int) -> str:
     if layer_idx < len(config.attention_layers):
         return config.attention_layers[layer_idx]
     return "global"
+
+
+def weight_t(weight: Any, contiguous: bool = False) -> Any:
+    np = require_numpy()
+    transposed = weight.T
+    if contiguous:
+        return np.ascontiguousarray(transposed)
+    return transposed
 
 
 def load_npz_weights(path: str | Path) -> Any:
