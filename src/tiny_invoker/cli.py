@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import random
 from pathlib import Path
+from statistics import mean, stdev
 import sys
+import time
 
 from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig, InferenceEngine
 from tiny_invoker.gpt_neo import NumpyGptNeoLanguageModel
 from tiny_invoker.hf import download_model_file, fetch_model_info, model_cache_dir
 from tiny_invoker.interfaces import ForwardInput, ForwardMode
+from tiny_invoker.sampler import choose_token
 from tiny_invoker.server import serve
 from tiny_invoker.tokenizer import HfTokenizer
 from tiny_invoker.weights import convert_torch_weights_to_npz, load_torch_weight_manifest
@@ -132,6 +136,29 @@ def build_serve_gpt_neo_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-file", default="config.json")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    return parser
+
+
+def build_bench_gpt_neo_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker bench-gpt-neo",
+        description="Benchmark the NumPy GPT-Neo runtime with segmented timing.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example roneneldan/TinyStories-33M.")
+    parser.add_argument("prompt", help="Prompt text.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--weights-file", default="pytorch_model.npz")
+    parser.add_argument("--weights-path", type=Path, default=None)
+    parser.add_argument("--config-file", default="config.json")
+    parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--repeats", type=int, default=2)
+    parser.add_argument("--warmups", type=int, default=1)
+    parser.add_argument("--sample-chars", type=int, default=500)
     return parser
 
 
@@ -356,6 +383,184 @@ def run_serve_gpt_neo(argv: list[str]) -> int:
     return 0
 
 
+def run_bench_gpt_neo(argv: list[str]) -> int:
+    parser = build_bench_gpt_neo_parser()
+    args = parser.parse_args(argv)
+    if args.max_new_tokens < 0:
+        raise SystemExit("max_new_tokens must be non-negative.")
+    if args.repeats <= 0:
+        raise SystemExit("repeats must be positive.")
+    if args.warmups < 0:
+        raise SystemExit("warmups must be non-negative.")
+
+    load_start = time.perf_counter()
+    model, tokenizer, _ = load_numpy_gpt_neo_model(args)
+    load_ms = elapsed_ms(load_start)
+    engine = InferenceEngine(model=model)
+    top_k = args.top_k if args.top_k > 0 else None
+    prompt_token_ids = tokenizer.encode(args.prompt)
+
+    for _ in range(args.warmups):
+        run_segmented_gpt_neo_benchmark(
+            model=model,
+            tokenizer=tokenizer,
+            prompt_token_ids=prompt_token_ids,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=top_k,
+            seed=args.seed,
+        )
+        run_end_to_end_gpt_neo_benchmark(
+            engine=engine,
+            prompt=args.prompt,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=top_k,
+            seed=args.seed,
+        )
+
+    segmented_rows = [
+        run_segmented_gpt_neo_benchmark(
+            model=model,
+            tokenizer=tokenizer,
+            prompt_token_ids=prompt_token_ids,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=top_k,
+            seed=args.seed,
+        )
+        for _ in range(args.repeats)
+    ]
+    end_to_end_rows = [
+        run_end_to_end_gpt_neo_benchmark(
+            engine=engine,
+            prompt=args.prompt,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=top_k,
+            seed=args.seed,
+        )
+        for _ in range(args.repeats)
+    ]
+
+    print("benchmark_name: gpt_neo_runtime")
+    print(f"model_id: {args.model_id}")
+    print(f"prompt: {args.prompt!r}")
+    print(f"prompt_tokens: {len(prompt_token_ids)}")
+    print(f"max_new_tokens: {args.max_new_tokens}")
+    print(f"temperature: {args.temperature}")
+    print(f"top_k: {top_k}")
+    print(f"repeats: {args.repeats}")
+    print(f"warmups: {args.warmups}")
+    print(f"model_load_ms_excluded: {load_ms:.2f}")
+    print_benchmark_metric("prefill_ms", segmented_rows)
+    print_benchmark_metric("decode_forward_ms", segmented_rows)
+    print_benchmark_metric("sampler_with_mask_ms", segmented_rows)
+    print_benchmark_metric("end_to_end_ms", end_to_end_rows)
+    print_benchmark_metric("end_to_end_tokens_per_second", end_to_end_rows)
+    if args.sample_chars > 0 and end_to_end_rows:
+        print("sample_output_prefix:")
+        print(end_to_end_rows[0]["text"][: args.sample_chars])
+    return 0
+
+
+def elapsed_ms(start_time: float) -> float:
+    return (time.perf_counter() - start_time) * 1000.0
+
+
+def run_segmented_gpt_neo_benchmark(
+    model: NumpyGptNeoLanguageModel,
+    tokenizer: HfTokenizer,
+    prompt_token_ids: list[int],
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int | None,
+    seed: int | None,
+) -> dict[str, float | str]:
+    rng = random.Random(seed)
+    prefill_start = time.perf_counter()
+    output = model.forward(
+        ForwardInput(
+            token_ids=prompt_token_ids,
+            mode=ForwardMode.PREFILL,
+        )
+    )
+    prefill_ms = elapsed_ms(prefill_start)
+
+    logits = output.logits
+    cache = output.cache
+    sampler_ms: list[float] = []
+    decode_ms: list[float] = []
+    generated_token_ids: list[int] = []
+    for step in range(max_new_tokens):
+        sample_start = time.perf_counter()
+        token_id = choose_token(
+            logits,
+            rng=rng,
+            temperature=temperature,
+            top_k=top_k,
+            blocked_token_ids=tokenizer.special_token_ids,
+        )
+        sampler_ms.append(elapsed_ms(sample_start))
+        generated_token_ids.append(token_id)
+
+        if step < max_new_tokens - 1:
+            decode_start = time.perf_counter()
+            output = model.forward(
+                ForwardInput(
+                    token_ids=[token_id],
+                    mode=ForwardMode.DECODE,
+                    cache=cache,
+                )
+            )
+            decode_ms.append(elapsed_ms(decode_start))
+            logits = output.logits
+            cache = output.cache
+
+    return {
+        "prefill_ms": prefill_ms,
+        "decode_forward_ms": mean(decode_ms) if decode_ms else 0.0,
+        "sampler_with_mask_ms": mean(sampler_ms) if sampler_ms else 0.0,
+        "text": tokenizer.decode(generated_token_ids),
+    }
+
+
+def run_end_to_end_gpt_neo_benchmark(
+    engine: InferenceEngine,
+    prompt: str,
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int | None,
+    seed: int | None,
+) -> dict[str, float | str]:
+    start = time.perf_counter()
+    result = engine.generate(
+        prompt,
+        config=GenerationConfig(
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            seed=seed,
+            trace=False,
+        ),
+    )
+    total_ms = elapsed_ms(start)
+    tokens_per_second = max_new_tokens / (total_ms / 1000.0) if total_ms > 0 else 0.0
+    return {
+        "end_to_end_ms": total_ms,
+        "end_to_end_tokens_per_second": tokens_per_second,
+        "text": result.text,
+    }
+
+
+def print_benchmark_metric(name: str, rows: list[dict[str, float | str]]) -> None:
+    values = [float(row[name]) for row in rows]
+    value_mean = mean(values) if values else 0.0
+    value_stdev = stdev(values) if len(values) > 1 else 0.0
+    print(f"{name}_avg: {value_mean:.4f}")
+    print(f"{name}_stdev: {value_stdev:.4f}")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "inspect-model":
@@ -372,4 +577,6 @@ def main(argv: list[str] | None = None) -> int:
         return run_generate_gpt_neo(args[1:])
     if args and args[0] == "serve-gpt-neo":
         return run_serve_gpt_neo(args[1:])
+    if args and args[0] == "bench-gpt-neo":
+        return run_bench_gpt_neo(args[1:])
     return run_generate(args)

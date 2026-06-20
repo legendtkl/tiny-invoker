@@ -94,6 +94,12 @@ Generate with the NumPy GPT-Neo runtime:
 PYTHONPATH=src python3 -m tiny_invoker generate-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --max-new-tokens 12 --temperature 0
 ```
 
+Benchmark the NumPy GPT-Neo runtime:
+
+```bash
+PYTHONPATH=src python3 -m tiny_invoker bench-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --max-new-tokens 128 --temperature 0 --top-k 20
+```
+
 Serve the NumPy GPT-Neo runtime locally:
 
 ```bash
