@@ -213,7 +213,8 @@ class DecoderOnlyTransformer:
             start_position=start_position,
             attention_type=layer_weights.attention_type,
         )
-        scores = np.where(mask[None, :, :], scores, -1.0e9)
+        if mask is not None:
+            scores = np.where(mask[None, :, :], scores, -1.0e9)
         probabilities = softmax(scores, axis=-1)
         context = probabilities @ value
         merged_context = merge_heads(context)
@@ -263,8 +264,16 @@ class DecoderOnlyTransformer:
         key_length: int,
         start_position: int,
         attention_type: str,
-    ) -> Any:
+    ) -> Any | None:
         np = require_numpy()
+        if query_length == 1 and key_length == start_position + 1:
+            if attention_type != "local":
+                return None
+            min_visible_position = max(0, start_position - self.config.window_size + 1)
+            if min_visible_position == 0:
+                return None
+            return np.arange(key_length)[None, :] >= min_visible_position
+
         query_positions = np.arange(start_position, start_position + query_length)[:, None]
         key_positions = np.arange(key_length)[None, :]
         mask = key_positions <= query_positions
