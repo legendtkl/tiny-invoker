@@ -5,7 +5,8 @@
 ## Design Constraints
 
 - Runs on macOS with the system `python3`.
-- Uses only the Python standard library for now.
+- Keeps the core demo simple; real Hugging Face tokenizers use the small `tokenizers` dependency.
+- Uses optional `numpy` and `torch` only for weight inspection and later weight conversion.
 - Keeps the repository small enough to read file by file.
 - Optimizes for learning the inference loop before adding fast tensor libraries.
 
@@ -22,7 +23,9 @@ The core loop of most text-generation inference engines is:
 7. Append the new token and repeat.
 8. Decode token ids back into text.
 
-This project implements that loop in plain Python, without external dependencies.
+The demo model keeps that loop easy to inspect. Hugging Face tokenizer and
+weight-inspection commands use focused dependencies instead of a full inference
+runtime.
 
 ## Prefill And Decode
 
@@ -30,6 +33,10 @@ The engine separates generation into two phases:
 
 - `prefill`: process the prompt once and return logits plus a cache.
 - `decode_one`: process one newly generated token with the existing cache.
+
+The model interface is still a single `forward` method. The engine calls it with
+`ForwardMode.PREFILL` or `ForwardMode.DECODE`, which mirrors production systems
+where scheduling stages are separate from model architecture code.
 
 In a real Transformer, the cache stores attention K/V tensors for each layer.
 The current bigram demo model stores token history instead, so the same engine

@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from tiny_invoker.interfaces import LanguageModel
+from tiny_invoker.interfaces import ForwardInput, ForwardMode, ForwardOutput, KVCache, LanguageModel
 from tiny_invoker.sampler import choose_token, top_candidates
 
 
@@ -57,7 +57,7 @@ class InferenceEngine:
         context_token_ids = prompt_token_ids[:] or [tokenizer.bos_id]
         generated_token_ids: list[int] = []
         steps: list[GenerationStep] = []
-        prefill_output = self.model.prefill(context_token_ids)
+        prefill_output = self._prefill(context_token_ids)
         logits = prefill_output.logits
         cache = prefill_output.cache
 
@@ -94,7 +94,7 @@ class InferenceEngine:
                 )
 
             if step < config.max_new_tokens - 1:
-                decode_output = self.model.decode_one(chosen_id, cache)
+                decode_output = self._decode_one(chosen_id, cache)
                 logits = decode_output.logits
                 cache = decode_output.cache
 
@@ -102,4 +102,21 @@ class InferenceEngine:
             text=prompt + tokenizer.decode(generated_token_ids),
             token_ids=prompt_token_ids + generated_token_ids,
             steps=steps,
+        )
+
+    def _prefill(self, prompt_token_ids: list[int]) -> ForwardOutput:
+        return self.model.forward(
+            ForwardInput(
+                token_ids=prompt_token_ids,
+                mode=ForwardMode.PREFILL,
+            )
+        )
+
+    def _decode_one(self, token_id: int, cache: KVCache) -> ForwardOutput:
+        return self.model.forward(
+            ForwardInput(
+                token_ids=[token_id],
+                mode=ForwardMode.DECODE,
+                cache=cache,
+            )
         )

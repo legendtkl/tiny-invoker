@@ -3,7 +3,7 @@ import unittest
 
 from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig, InferenceEngine
-from tiny_invoker.interfaces import DecodeOutput, KVCache, PrefillOutput
+from tiny_invoker.interfaces import ForwardInput, ForwardMode, ForwardOutput
 from tiny_invoker.tokenizer import CharTokenizer
 
 
@@ -24,23 +24,28 @@ class CountingModel:
         logits[self.tokenizer.token_to_id[token]] = 10.0
         return logits
 
-    def prefill(self, prompt_token_ids: list[int]) -> PrefillOutput:
-        self.prefill_calls += 1
-        self.prefill_token_ids = prompt_token_ids[:]
-        return PrefillOutput(
-            logits=self._logits_for("a"),
-            cache=CountingCache(token_ids=prompt_token_ids[:]),
-        )
+    def forward(self, request: ForwardInput) -> ForwardOutput:
+        if request.mode == ForwardMode.PREFILL:
+            self.prefill_calls += 1
+            self.prefill_token_ids = request.token_ids[:]
+            return ForwardOutput(
+                logits=self._logits_for("a"),
+                cache=CountingCache(token_ids=request.token_ids[:]),
+            )
 
-    def decode_one(self, token_id: int, cache: KVCache) -> DecodeOutput:
-        if not isinstance(cache, CountingCache):
-            raise TypeError("CountingModel expected CountingCache.")
+        if request.mode == ForwardMode.DECODE:
+            if not isinstance(request.cache, CountingCache):
+                raise TypeError("CountingModel expected CountingCache.")
+            if len(request.token_ids) != 1:
+                raise ValueError("CountingModel decode expects exactly one token id.")
 
-        self.decode_calls += 1
-        return DecodeOutput(
-            logits=self._logits_for("b"),
-            cache=CountingCache(token_ids=cache.token_ids + [token_id]),
-        )
+            self.decode_calls += 1
+            return ForwardOutput(
+                logits=self._logits_for("b"),
+                cache=CountingCache(token_ids=request.cache.token_ids + request.token_ids),
+            )
+
+        raise ValueError(f"Unsupported mode: {request.mode}.")
 
 
 class InferenceEngineTest(unittest.TestCase):
@@ -79,7 +84,7 @@ class InferenceEngineTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             GenerationConfig(top_k=0).validate()
 
-    def test_engine_runs_prefill_then_decode_steps(self) -> None:
+    def test_engine_runs_prefill_mode_then_decode_mode(self) -> None:
         model = CountingModel()
         engine = InferenceEngine(model=model)
 

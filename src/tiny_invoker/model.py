@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from tiny_invoker.interfaces import DecodeOutput, KVCache, PrefillOutput
+from tiny_invoker.interfaces import ForwardInput, ForwardMode, ForwardOutput
 from tiny_invoker.tokenizer import CharTokenizer
 
 
@@ -55,19 +55,29 @@ class BigramLanguageModel:
         previous_id = context_token_ids[-1] if context_token_ids else self.tokenizer.bos_id
         return list(self.logits_table[previous_id])
 
-    def prefill(self, prompt_token_ids: list[int]) -> PrefillOutput:
+    def forward(self, request: ForwardInput) -> ForwardOutput:
+        if request.mode == ForwardMode.PREFILL:
+            return self._prefill(request.token_ids)
+        if request.mode == ForwardMode.DECODE:
+            return self._decode(request)
+        raise ValueError(f"Unsupported forward mode: {request.mode}.")
+
+    def _prefill(self, prompt_token_ids: list[int]) -> ForwardOutput:
         context_token_ids = prompt_token_ids[:] or [self.tokenizer.bos_id]
-        return PrefillOutput(
+        return ForwardOutput(
             logits=self.next_logits(context_token_ids),
             cache=BigramKVCache(token_ids=context_token_ids),
         )
 
-    def decode_one(self, token_id: int, cache: KVCache) -> DecodeOutput:
+    def _decode(self, request: ForwardInput) -> ForwardOutput:
+        if len(request.token_ids) != 1:
+            raise ValueError("Bigram decode mode expects exactly one token id.")
+        cache = request.cache
         if not isinstance(cache, BigramKVCache):
             raise TypeError("BigramLanguageModel expected BigramKVCache.")
 
-        token_ids = cache.token_ids + [token_id]
-        return DecodeOutput(
+        token_ids = cache.token_ids + request.token_ids
+        return ForwardOutput(
             logits=self.next_logits(token_ids),
             cache=BigramKVCache(token_ids=token_ids),
         )
