@@ -6,6 +6,7 @@ from tiny_invoker.gpt_neo import NumpyGptNeoCache, NumpyGptNeoConfig, NumpyGptNe
 from tiny_invoker.hf import HfModelInfo, download_model_file, fetch_model_info
 from tiny_invoker.interfaces import ForwardInput, ForwardMode, ForwardOutput, KVCache, LanguageModel
 from tiny_invoker.model import BigramKVCache, BigramLanguageModel
+from tiny_invoker.server import GenerateRequest, TinyInvokerServer, serve
 from tiny_invoker.tokenizer import CharTokenizer, HfTokenizer, TextTokenizer
 from tiny_invoker.weights import (
     WeightManifest,
@@ -24,6 +25,7 @@ __all__ = [
     "GenerationConfig",
     "GenerationResult",
     "GenerationStep",
+    "GenerateRequest",
     "HfModelInfo",
     "HfTokenizer",
     "InferenceEngine",
@@ -32,6 +34,7 @@ __all__ = [
     "NumpyGptNeoCache",
     "NumpyGptNeoConfig",
     "NumpyGptNeoLanguageModel",
+    "TinyInvokerServer",
     "TextTokenizer",
     "WeightManifest",
     "WeightTensorInfo",
@@ -40,4 +43,5 @@ __all__ = [
     "download_model_file",
     "fetch_model_info",
     "load_torch_weight_manifest",
+    "serve",
 ]

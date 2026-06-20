@@ -9,6 +9,7 @@ from tiny_invoker.engine import GenerationConfig, InferenceEngine
 from tiny_invoker.gpt_neo import NumpyGptNeoLanguageModel
 from tiny_invoker.hf import download_model_file, fetch_model_info, model_cache_dir
 from tiny_invoker.interfaces import ForwardInput, ForwardMode
+from tiny_invoker.server import serve
 from tiny_invoker.tokenizer import HfTokenizer
 from tiny_invoker.weights import convert_torch_weights_to_npz, load_torch_weight_manifest
 
@@ -114,6 +115,23 @@ def build_generate_gpt_neo_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--trace", action="store_true")
+    return parser
+
+
+def build_serve_gpt_neo_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker serve-gpt-neo",
+        description="Serve the NumPy GPT-Neo runtime over a tiny local HTTP API.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example roneneldan/TinyStories-33M.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--weights-file", default="pytorch_model.npz")
+    parser.add_argument("--weights-path", type=Path, default=None)
+    parser.add_argument("--config-file", default="config.json")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
     return parser
 
 
@@ -324,6 +342,20 @@ def run_generate_gpt_neo(argv: list[str]) -> int:
     return 0
 
 
+def run_serve_gpt_neo(argv: list[str]) -> int:
+    parser = build_serve_gpt_neo_parser()
+    args = parser.parse_args(argv)
+
+    model, _, _ = load_numpy_gpt_neo_model(args)
+    serve(
+        engine=InferenceEngine(model=model),
+        model_name=args.model_id,
+        host=args.host,
+        port=args.port,
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "inspect-model":
@@ -338,4 +370,6 @@ def main(argv: list[str] | None = None) -> int:
         return run_probe_gpt_neo(args[1:])
     if args and args[0] == "generate-gpt-neo":
         return run_generate_gpt_neo(args[1:])
+    if args and args[0] == "serve-gpt-neo":
+        return run_serve_gpt_neo(args[1:])
     return run_generate(args)

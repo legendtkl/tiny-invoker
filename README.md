@@ -88,6 +88,15 @@ Generate with the NumPy GPT-Neo runtime:
 PYTHONPATH=src python3 -m tiny_invoker generate-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --max-new-tokens 12 --temperature 0
 ```
 
+Serve the NumPy GPT-Neo runtime locally:
+
+```bash
+PYTHONPATH=src python3 -m tiny_invoker serve-gpt-neo roneneldan/TinyStories-33M --host 127.0.0.1 --port 8000
+curl -X POST http://127.0.0.1:8000/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Once upon a time","max_new_tokens":8,"temperature":0,"top_k":20}'
+```
+
 The GPT-Neo runtime now includes NumPy attention, MLP, residual connections,
 layer norms, and per-layer K/V cache for a single request on CPU. It is built
 for learning, not vLLM/SGLang-style batching or optimized serving yet.
@@ -114,6 +123,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 - `src/tiny_invoker/model.py`: a tiny bigram language model.
 - `src/tiny_invoker/sampler.py`: softmax, top-k filtering, and token sampling.
 - `src/tiny_invoker/engine.py`: the inference loop and generation config.
+- `src/tiny_invoker/server.py`: a minimal local HTTP serving layer.
 - `src/tiny_invoker/demo.py`: builds a demo engine from a small built-in corpus.
 - `src/tiny_invoker/cli.py`: command line entry point.
 
