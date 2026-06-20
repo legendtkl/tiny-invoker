@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 from tiny_invoker.demo import build_demo_engine
-from tiny_invoker.engine import GenerationConfig
+from tiny_invoker.engine import GenerationConfig, InferenceEngine
 from tiny_invoker.gpt_neo import NumpyGptNeoLanguageModel
 from tiny_invoker.hf import download_model_file, fetch_model_info, model_cache_dir
 from tiny_invoker.interfaces import ForwardInput, ForwardMode
@@ -93,6 +93,27 @@ def build_probe_gpt_neo_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weights-file", default="pytorch_model.npz")
     parser.add_argument("--weights-path", type=Path, default=None)
     parser.add_argument("--config-file", default="config.json")
+    return parser
+
+
+def build_generate_gpt_neo_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker generate-gpt-neo",
+        description="Generate text with the NumPy GPT-Neo runtime.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example roneneldan/TinyStories-33M.")
+    parser.add_argument("prompt", help="Prompt text.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--weights-file", default="pytorch_model.npz")
+    parser.add_argument("--weights-path", type=Path, default=None)
+    parser.add_argument("--config-file", default="config.json")
+    parser.add_argument("--max-new-tokens", type=int, default=20)
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--trace", action="store_true")
     return parser
 
 
@@ -213,6 +234,27 @@ def run_probe_gpt_neo(argv: list[str]) -> int:
     parser = build_probe_gpt_neo_parser()
     args = parser.parse_args(argv)
 
+    model, tokenizer, paths = load_numpy_gpt_neo_model(args)
+    token_ids = tokenizer.encode(args.prompt)
+    output = model.forward(
+        ForwardInput(
+            token_ids=token_ids,
+            mode=ForwardMode.PREFILL,
+        )
+    )
+    logits = output.logits
+    print(f"config_file: {paths['config']}")
+    print(f"weights_file: {paths['weights']}")
+    print(f"prompt_token_ids: {' '.join(str(token_id) for token_id in token_ids)}")
+    print(f"logits_size: {len(logits)}")
+    print(f"cache_tokens: {len(output.cache.token_ids)}")
+    top_id = max(range(len(logits)), key=lambda token_id: logits[token_id])
+    print(f"top_token_id: {top_id}")
+    print(f"top_token_text: {tokenizer.decode([top_id])!r}")
+    return 0
+
+
+def load_numpy_gpt_neo_model(args: argparse.Namespace) -> tuple[NumpyGptNeoLanguageModel, HfTokenizer, dict[str, Path]]:
     config_path = download_model_file(
         args.model_id,
         args.config_file,
@@ -246,22 +288,39 @@ def run_probe_gpt_neo(argv: list[str]) -> int:
         weights_path=weights_path,
         tokenizer=tokenizer,
     )
-    token_ids = tokenizer.encode(args.prompt)
-    output = model.forward(
-        ForwardInput(
-            token_ids=token_ids,
-            mode=ForwardMode.PREFILL,
-        )
+    return model, tokenizer, {"config": config_path, "tokenizer": tokenizer_path, "weights": weights_path}
+
+
+def run_generate_gpt_neo(argv: list[str]) -> int:
+    parser = build_generate_gpt_neo_parser()
+    args = parser.parse_args(argv)
+
+    model, _, _ = load_numpy_gpt_neo_model(args)
+    top_k = args.top_k if args.top_k > 0 else None
+    engine = InferenceEngine(model=model)
+    result = engine.generate(
+        args.prompt,
+        config=GenerationConfig(
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=top_k,
+            seed=args.seed,
+            trace=args.trace,
+        ),
     )
-    logits = output.logits
-    print(f"config_file: {config_path}")
-    print(f"weights_file: {weights_path}")
-    print(f"prompt_token_ids: {' '.join(str(token_id) for token_id in token_ids)}")
-    print(f"logits_size: {len(logits)}")
-    print(f"cache_tokens: {len(output.cache.token_ids)}")
-    top_id = max(range(len(logits)), key=lambda token_id: logits[token_id])
-    print(f"top_token_id: {top_id}")
-    print(f"top_token_text: {tokenizer.decode([top_id])!r}")
+    print(result.text)
+    if args.trace:
+        print()
+        print("trace:")
+        for step in result.steps:
+            candidates = ", ".join(
+                f"{token!r}:{probability:.2f}"
+                for token, probability in step.candidates
+            )
+            print(
+                f"{step.step:02d}. prev={step.previous_token!r} "
+                f"next={step.chosen_token!r} candidates=[{candidates}]"
+            )
     return 0
 
 
@@ -277,4 +336,6 @@ def main(argv: list[str] | None = None) -> int:
         return run_convert_weights(args[1:])
     if args and args[0] == "probe-gpt-neo":
         return run_probe_gpt_neo(args[1:])
+    if args and args[0] == "generate-gpt-neo":
+        return run_generate_gpt_neo(args[1:])
     return run_generate(args)

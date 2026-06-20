@@ -82,8 +82,15 @@ python3 -m pip install '.[runtime]'
 PYTHONPATH=src python3 -m tiny_invoker probe-gpt-neo roneneldan/TinyStories-33M "Once upon a time"
 ```
 
-`probe-gpt-neo` currently verifies tokenizer/config/NumPy-weight wiring and
-logits shape. Transformer attention and MLP blocks are added in later steps.
+Generate with the NumPy GPT-Neo runtime:
+
+```bash
+PYTHONPATH=src python3 -m tiny_invoker generate-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --max-new-tokens 12 --temperature 0
+```
+
+The GPT-Neo runtime now includes NumPy attention, MLP, residual connections,
+layer norms, and per-layer K/V cache for a single request on CPU. It is built
+for learning, not vLLM/SGLang-style batching or optimized serving yet.
 
 To see each generation step:
 

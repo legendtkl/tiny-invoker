@@ -70,6 +70,19 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
                         3,
                     ),
                     "transformer.wpe.weight": np.zeros((8, 3), dtype=np.float32),
+                    "transformer.h.0.ln_1.weight": np.ones((3,), dtype=np.float32),
+                    "transformer.h.0.ln_1.bias": np.zeros((3,), dtype=np.float32),
+                    "transformer.h.0.ln_2.weight": np.ones((3,), dtype=np.float32),
+                    "transformer.h.0.ln_2.bias": np.zeros((3,), dtype=np.float32),
+                    "transformer.h.0.attn.attention.q_proj.weight": np.eye(3, dtype=np.float32),
+                    "transformer.h.0.attn.attention.k_proj.weight": np.eye(3, dtype=np.float32),
+                    "transformer.h.0.attn.attention.v_proj.weight": np.eye(3, dtype=np.float32),
+                    "transformer.h.0.attn.attention.out_proj.weight": np.eye(3, dtype=np.float32),
+                    "transformer.h.0.attn.attention.out_proj.bias": np.zeros((3,), dtype=np.float32),
+                    "transformer.h.0.mlp.c_fc.weight": np.zeros((12, 3), dtype=np.float32),
+                    "transformer.h.0.mlp.c_fc.bias": np.zeros((12,), dtype=np.float32),
+                    "transformer.h.0.mlp.c_proj.weight": np.zeros((3, 12), dtype=np.float32),
+                    "transformer.h.0.mlp.c_proj.bias": np.zeros((3,), dtype=np.float32),
                     "transformer.ln_f.weight": np.ones((3,), dtype=np.float32),
                     "transformer.ln_f.bias": np.zeros((3,), dtype=np.float32),
                 },
@@ -96,7 +109,12 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
 
         self.assertEqual(len(prefill.logits), tokenizer.vocab_size)
         self.assertEqual(prefill.cache.token_ids, tokenizer.encode("a"))
+        self.assertEqual(len(prefill.cache.keys), 1)
+        self.assertEqual(prefill.cache.keys[0].shape, (1, 1, 3))
+        self.assertEqual(prefill.cache.values[0].shape, (1, 1, 3))
         self.assertEqual(decode.cache.token_ids, tokenizer.encode("ab"))
+        self.assertEqual(decode.cache.keys[0].shape, (1, 2, 3))
+        self.assertEqual(decode.cache.values[0].shape, (1, 2, 3))
 
 
 if __name__ == "__main__":
