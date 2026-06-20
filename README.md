@@ -43,6 +43,12 @@ From this repository:
 PYTHONPATH=src python3 -m tiny_invoker "tiny" --max-new-tokens 80 --seed 7
 ```
 
+Inspect the target TinyStories model repository:
+
+```bash
+PYTHONPATH=src python3 -m tiny_invoker inspect-model roneneldan/TinyStories-33M
+```
+
 To see each generation step:
 
 ```bash

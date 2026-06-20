@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig
+from tiny_invoker.hf import fetch_model_info
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_generate_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the tiny learning-oriented inference engine.",
     )
@@ -19,8 +21,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
+def build_inspect_model_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker inspect-model",
+        description="Inspect a Hugging Face causal language model repository.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example roneneldan/TinyStories-33M.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    return parser
+
+
+def run_generate(argv: list[str]) -> int:
+    parser = build_generate_parser()
     args = parser.parse_args(argv)
 
     engine = build_demo_engine()
@@ -50,3 +63,24 @@ def main(argv: list[str] | None = None) -> int:
                 f"next={step.chosen_token!r} candidates=[{candidates}]"
             )
     return 0
+
+
+def run_inspect_model(argv: list[str]) -> int:
+    parser = build_inspect_model_parser()
+    args = parser.parse_args(argv)
+
+    info = fetch_model_info(
+        args.model_id,
+        endpoint=args.endpoint,
+        revision=args.revision,
+    )
+    for line in info.summary_lines():
+        print(line)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "inspect-model":
+        return run_inspect_model(args[1:])
+    return run_generate(args)
