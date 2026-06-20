@@ -27,6 +27,12 @@ The demo model keeps that loop easy to inspect. Hugging Face tokenizer and
 weight-inspection commands use focused dependencies instead of a full inference
 runtime.
 
+## Docs
+
+- [Transformer runtime walkthrough](docs/transformer.md): visual walkthrough of
+  `DecoderOnlyTransformer.forward()`, Transformer blocks, self-attention, K/V
+  cache, prefill, and decode. Includes Chinese and English explanations.
+
 ## Prefill And Decode
 
 The engine separates generation into two phases:
