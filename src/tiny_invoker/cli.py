@@ -8,7 +8,7 @@ from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig
 from tiny_invoker.hf import download_model_file, fetch_model_info
 from tiny_invoker.tokenizer import HfTokenizer
-from tiny_invoker.weights import load_torch_weight_manifest
+from tiny_invoker.weights import convert_torch_weights_to_npz, load_torch_weight_manifest
 
 
 def build_generate_parser() -> argparse.ArgumentParser:
@@ -59,6 +59,22 @@ def build_inspect_weights_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--filename", default="pytorch_model.bin")
     parser.add_argument("--limit", type=int, default=80, help="Maximum tensor lines to print. Use 0 for all.")
+    return parser
+
+
+def build_convert_weights_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker convert-weights",
+        description="Convert a Hugging Face PyTorch state_dict to a NumPy .npz file.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example roneneldan/TinyStories-33M.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--filename", default="pytorch_model.bin")
+    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--uncompressed", action="store_true", help="Use np.savez instead of np.savez_compressed.")
+    parser.add_argument("--limit", type=int, default=20, help="Maximum converted tensor lines to print. Use 0 for all.")
     return parser
 
 
@@ -148,6 +164,33 @@ def run_inspect_weights(argv: list[str]) -> int:
     return 0
 
 
+def run_convert_weights(argv: list[str]) -> int:
+    parser = build_convert_weights_parser()
+    args = parser.parse_args(argv)
+
+    weights_path = download_model_file(
+        args.model_id,
+        args.filename,
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+        timeout=300.0,
+    )
+    output_path = args.output
+    if output_path is None:
+        output_path = weights_path.with_suffix(".npz")
+
+    manifest = convert_torch_weights_to_npz(
+        weights_path,
+        output_path,
+        compressed=not args.uncompressed,
+    )
+    limit = None if args.limit == 0 else args.limit
+    for line in manifest.summary_lines(limit=limit):
+        print(line)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "inspect-model":
@@ -156,4 +199,6 @@ def main(argv: list[str] | None = None) -> int:
         return run_tokenize(args[1:])
     if args and args[0] == "inspect-weights":
         return run_inspect_weights(args[1:])
+    if args and args[0] == "convert-weights":
+        return run_convert_weights(args[1:])
     return run_generate(args)

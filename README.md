@@ -69,6 +69,12 @@ python3 -m pip install '.[weights]'
 PYTHONPATH=src python3 -m tiny_invoker inspect-weights roneneldan/TinyStories-33M --limit 40
 ```
 
+Convert PyTorch weights to a NumPy file for the later runtime path:
+
+```bash
+PYTHONPATH=src python3 -m tiny_invoker convert-weights roneneldan/TinyStories-33M
+```
+
 To see each generation step:
 
 ```bash

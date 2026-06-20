@@ -6,7 +6,12 @@ from tiny_invoker.hf import HfModelInfo, download_model_file, fetch_model_info
 from tiny_invoker.interfaces import ForwardInput, ForwardMode, ForwardOutput, KVCache, LanguageModel
 from tiny_invoker.model import BigramKVCache, BigramLanguageModel
 from tiny_invoker.tokenizer import CharTokenizer, HfTokenizer, TextTokenizer
-from tiny_invoker.weights import WeightManifest, WeightTensorInfo, load_torch_weight_manifest
+from tiny_invoker.weights import (
+    WeightManifest,
+    WeightTensorInfo,
+    convert_torch_weights_to_npz,
+    load_torch_weight_manifest,
+)
 
 __all__ = [
     "BigramKVCache",
@@ -27,6 +32,7 @@ __all__ = [
     "WeightManifest",
     "WeightTensorInfo",
     "build_demo_engine",
+    "convert_torch_weights_to_npz",
     "download_model_file",
     "fetch_model_info",
     "load_torch_weight_manifest",
