@@ -97,8 +97,10 @@ curl -X POST http://127.0.0.1:8000/generate \
   -d '{"prompt":"Once upon a time","max_new_tokens":8,"temperature":0,"top_k":20}'
 ```
 
-The GPT-Neo runtime now includes NumPy attention, MLP, residual connections,
-layer norms, and per-layer K/V cache for a single request on CPU. It is built
+The GPT-Neo runtime now uses a small decoder-only Transformer backbone. GPT-Neo
+specific code maps Hugging Face config and weight names into that backbone, while
+the shared Transformer code runs embedding, attention, MLP, residual paths, final
+norm, LM head, and per-layer K/V cache for a single request on CPU. It is built
 for learning, not vLLM/SGLang-style batching or optimized serving yet.
 
 To see each generation step:
@@ -118,7 +120,8 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 - `src/tiny_invoker/tokenizer.py`: turns text into token ids and back.
 - `src/tiny_invoker/hf.py`: inspects Hugging Face model metadata and caches model files.
 - `src/tiny_invoker/weights.py`: inspects PyTorch weight names, shapes, and dtypes.
-- `src/tiny_invoker/gpt_neo.py`: loads GPT-Neo config and NumPy weights for the runtime path.
+- `src/tiny_invoker/transformer.py`: shared decoder-only Transformer execution code.
+- `src/tiny_invoker/gpt_neo.py`: adapts GPT-Neo config and NumPy weights into the shared Transformer.
 - `src/tiny_invoker/interfaces.py`: defines the minimum model interface.
 - `src/tiny_invoker/model.py`: a tiny bigram language model.
 - `src/tiny_invoker/sampler.py`: softmax, top-k filtering, and token sampling.

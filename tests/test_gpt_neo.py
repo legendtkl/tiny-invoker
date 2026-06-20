@@ -30,6 +30,9 @@ class NumpyGptNeoConfigTest(unittest.TestCase):
 
         self.assertEqual(config.vocab_size, 4)
         self.assertEqual(config.hidden_size, 3)
+        transformer_config = config.to_transformer_config()
+        self.assertEqual(transformer_config.num_layers, 1)
+        self.assertEqual(transformer_config.position_embedding, "absolute")
 
     def test_rejects_non_gpt_neo_config(self) -> None:
         with self.assertRaises(ValueError):
@@ -43,6 +46,7 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
         from tiny_invoker.gpt_neo import NumpyGptNeoLanguageModel
         from tiny_invoker.interfaces import ForwardInput, ForwardMode
         from tiny_invoker.tokenizer import CharTokenizer
+        from tiny_invoker.transformer import DecoderOnlyTransformer
 
         tokenizer = CharTokenizer.from_text("ab")
         with TemporaryDirectory() as tmp_dir:
@@ -93,6 +97,7 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
                 weights_path=weights_path,
                 tokenizer=tokenizer,
             )
+            self.assertIsInstance(model.transformer, DecoderOnlyTransformer)
             prefill = model.forward(
                 ForwardInput(
                     token_ids=tokenizer.encode("a"),
