@@ -12,6 +12,12 @@ dependencies = [
     "tokenizers>=0.22",
 ]
 
+[project.optional-dependencies]
+weights = [
+    "numpy>=2",
+    "torch>=2.6",
+]
+
 [project.scripts]
 tiny-invoker = "tiny_invoker.cli:main"
 

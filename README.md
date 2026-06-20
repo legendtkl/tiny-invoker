@@ -55,6 +55,13 @@ Tokenize text with the real TinyStories tokenizer:
 PYTHONPATH=src python3 -m tiny_invoker tokenize roneneldan/TinyStories-33M "Once upon a time"
 ```
 
+Inspect PyTorch weight names and shapes:
+
+```bash
+python3 -m pip install '.[weights]'
+PYTHONPATH=src python3 -m tiny_invoker inspect-weights roneneldan/TinyStories-33M --limit 40
+```
+
 To see each generation step:
 
 ```bash
@@ -71,6 +78,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 
 - `src/tiny_invoker/tokenizer.py`: turns text into token ids and back.
 - `src/tiny_invoker/hf.py`: inspects Hugging Face model metadata and caches model files.
+- `src/tiny_invoker/weights.py`: inspects PyTorch weight names, shapes, and dtypes.
 - `src/tiny_invoker/interfaces.py`: defines the minimum model interface.
 - `src/tiny_invoker/model.py`: a tiny bigram language model.
 - `src/tiny_invoker/sampler.py`: softmax, top-k filtering, and token sampling.

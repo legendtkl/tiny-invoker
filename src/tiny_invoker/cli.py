@@ -8,6 +8,7 @@ from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig
 from tiny_invoker.hf import download_model_file, fetch_model_info
 from tiny_invoker.tokenizer import HfTokenizer
+from tiny_invoker.weights import load_torch_weight_manifest
 
 
 def build_generate_parser() -> argparse.ArgumentParser:
@@ -44,6 +45,20 @@ def build_tokenize_parser() -> argparse.ArgumentParser:
     parser.add_argument("--revision", default="main")
     parser.add_argument("--endpoint", default="https://huggingface.co")
     parser.add_argument("--cache-dir", type=Path, default=None)
+    return parser
+
+
+def build_inspect_weights_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker inspect-weights",
+        description="Inspect a Hugging Face PyTorch state_dict weight file.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example roneneldan/TinyStories-33M.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--filename", default="pytorch_model.bin")
+    parser.add_argument("--limit", type=int, default=80, help="Maximum tensor lines to print. Use 0 for all.")
     return parser
 
 
@@ -114,10 +129,31 @@ def run_tokenize(argv: list[str]) -> int:
     return 0
 
 
+def run_inspect_weights(argv: list[str]) -> int:
+    parser = build_inspect_weights_parser()
+    args = parser.parse_args(argv)
+
+    weights_path = download_model_file(
+        args.model_id,
+        args.filename,
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+        timeout=300.0,
+    )
+    manifest = load_torch_weight_manifest(weights_path)
+    limit = None if args.limit == 0 else args.limit
+    for line in manifest.summary_lines(limit=limit):
+        print(line)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "inspect-model":
         return run_inspect_model(args[1:])
     if args and args[0] == "tokenize":
         return run_tokenize(args[1:])
+    if args and args[0] == "inspect-weights":
+        return run_inspect_weights(args[1:])
     return run_generate(args)
