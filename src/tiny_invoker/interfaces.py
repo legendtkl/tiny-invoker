@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from tiny_invoker.tokenizer import CharTokenizer
+from tiny_invoker.tokenizer import TextTokenizer
 
 
 class KVCache(Protocol):
@@ -25,7 +25,7 @@ class DecodeOutput:
 class LanguageModel(Protocol):
     """Minimum interface required by the inference engine."""
 
-    tokenizer: CharTokenizer
+    tokenizer: TextTokenizer
 
     def prefill(self, prompt_token_ids: list[int]) -> PrefillOutput:
         """Process the prompt and return scores for the first generated token."""

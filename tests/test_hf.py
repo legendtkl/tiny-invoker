@@ -1,6 +1,7 @@
 import unittest
+from pathlib import Path
 
-from tiny_invoker.hf import model_info_from_payload
+from tiny_invoker.hf import model_cache_dir, model_info_from_payload
 
 
 class HfModelInfoTest(unittest.TestCase):
@@ -48,6 +49,18 @@ class HfModelInfoTest(unittest.TestCase):
         self.assertEqual(
             info.missing_files(),
             ("tokenizer.json", "vocab.json", "merges.txt", "pytorch_model.bin"),
+        )
+
+    def test_builds_stable_model_cache_dir(self) -> None:
+        path = model_cache_dir(
+            "roneneldan/TinyStories-33M",
+            revision="main",
+            cache_dir=Path("/tmp/tiny-cache"),
+        )
+
+        self.assertEqual(
+            path,
+            Path("/tmp/tiny-cache/hf/roneneldan--TinyStories-33M/main"),
         )
 
 

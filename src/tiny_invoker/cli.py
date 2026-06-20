@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 
 from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig
-from tiny_invoker.hf import fetch_model_info
+from tiny_invoker.hf import download_model_file, fetch_model_info
+from tiny_invoker.tokenizer import HfTokenizer
 
 
 def build_generate_parser() -> argparse.ArgumentParser:
@@ -29,6 +31,19 @@ def build_inspect_model_parser() -> argparse.ArgumentParser:
     parser.add_argument("model_id", help="Hugging Face model id, for example roneneldan/TinyStories-33M.")
     parser.add_argument("--revision", default="main")
     parser.add_argument("--endpoint", default="https://huggingface.co")
+    return parser
+
+
+def build_tokenize_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker tokenize",
+        description="Tokenize text with a Hugging Face tokenizer.json file.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example roneneldan/TinyStories-33M.")
+    parser.add_argument("text", help="Text to encode.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
     return parser
 
 
@@ -79,8 +94,30 @@ def run_inspect_model(argv: list[str]) -> int:
     return 0
 
 
+def run_tokenize(argv: list[str]) -> int:
+    parser = build_tokenize_parser()
+    args = parser.parse_args(argv)
+
+    tokenizer_path = download_model_file(
+        args.model_id,
+        "tokenizer.json",
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+    )
+    tokenizer = HfTokenizer.from_file(tokenizer_path)
+    token_ids = tokenizer.encode(args.text)
+    print(f"tokenizer_file: {tokenizer_path}")
+    print(f"vocab_size: {tokenizer.vocab_size}")
+    print("ids: " + " ".join(str(token_id) for token_id in token_ids))
+    print(f"decoded: {tokenizer.decode(token_ids)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "inspect-model":
         return run_inspect_model(args[1:])
+    if args and args[0] == "tokenize":
+        return run_tokenize(args[1:])
     return run_generate(args)

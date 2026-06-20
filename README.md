@@ -49,6 +49,12 @@ Inspect the target TinyStories model repository:
 PYTHONPATH=src python3 -m tiny_invoker inspect-model roneneldan/TinyStories-33M
 ```
 
+Tokenize text with the real TinyStories tokenizer:
+
+```bash
+PYTHONPATH=src python3 -m tiny_invoker tokenize roneneldan/TinyStories-33M "Once upon a time"
+```
+
 To see each generation step:
 
 ```bash
@@ -64,6 +70,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 ## Project Map
 
 - `src/tiny_invoker/tokenizer.py`: turns text into token ids and back.
+- `src/tiny_invoker/hf.py`: inspects Hugging Face model metadata and caches model files.
 - `src/tiny_invoker/interfaces.py`: defines the minimum model interface.
 - `src/tiny_invoker/model.py`: a tiny bigram language model.
 - `src/tiny_invoker/sampler.py`: softmax, top-k filtering, and token sampling.

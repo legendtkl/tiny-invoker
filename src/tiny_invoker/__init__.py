@@ -2,10 +2,10 @@
 
 from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig, GenerationResult, GenerationStep, InferenceEngine
-from tiny_invoker.hf import HfModelInfo, fetch_model_info
+from tiny_invoker.hf import HfModelInfo, download_model_file, fetch_model_info
 from tiny_invoker.interfaces import DecodeOutput, KVCache, LanguageModel, PrefillOutput
 from tiny_invoker.model import BigramKVCache, BigramLanguageModel
-from tiny_invoker.tokenizer import CharTokenizer
+from tiny_invoker.tokenizer import CharTokenizer, HfTokenizer, TextTokenizer
 
 __all__ = [
     "BigramKVCache",
@@ -16,10 +16,13 @@ __all__ = [
     "GenerationResult",
     "GenerationStep",
     "HfModelInfo",
+    "HfTokenizer",
     "InferenceEngine",
     "KVCache",
     "LanguageModel",
     "PrefillOutput",
+    "TextTokenizer",
     "build_demo_engine",
+    "download_model_file",
     "fetch_model_info",
 ]

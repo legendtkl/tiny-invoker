@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import platform
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 from urllib.request import urlopen
@@ -111,3 +113,51 @@ def fetch_model_info(
         api_payload=api_payload,
         config_payload=config_payload,
     )
+
+
+def default_cache_dir() -> Path:
+    if platform.system() == "Darwin":
+        return Path.home() / "Library" / "Caches" / "tiny-invoker"
+    return Path.home() / ".cache" / "tiny-invoker"
+
+
+def model_cache_dir(
+    model_id: str,
+    revision: str = "main",
+    cache_dir: Path | None = None,
+) -> Path:
+    root = cache_dir or default_cache_dir()
+    safe_model_id = model_id.replace("/", "--")
+    safe_revision = revision.replace("/", "--")
+    return root / "hf" / safe_model_id / safe_revision
+
+
+def download_model_file(
+    model_id: str,
+    filename: str,
+    endpoint: str = DEFAULT_HF_ENDPOINT,
+    revision: str = "main",
+    cache_dir: Path | None = None,
+    timeout: float = 60.0,
+) -> Path:
+    target_dir = model_cache_dir(model_id, revision=revision, cache_dir=cache_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / filename
+    if target_path.exists():
+        return target_path
+
+    quoted_model_id = quote(model_id, safe="/")
+    quoted_revision = quote(revision, safe="")
+    quoted_filename = quote(filename, safe="/")
+    url = f"{endpoint}/{quoted_model_id}/resolve/{quoted_revision}/{quoted_filename}"
+
+    tmp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+    with urlopen(url, timeout=timeout) as response:
+        with tmp_path.open("wb") as output:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+    tmp_path.replace(target_path)
+    return target_path
