@@ -29,6 +29,7 @@ class TransformerConfig:
     window_size: int
     activation: str = "gelu_new"
     position_embedding: str = "absolute"
+    scale_attention_scores: bool = True
 
     @property
     def head_dim(self) -> int:
@@ -231,7 +232,9 @@ class DecoderOnlyTransformer:
         key = key_cache[:, :end_position, :]
         value = value_cache[:, :end_position, :]
 
-        scores = (query @ np.swapaxes(key, -1, -2)) / np.sqrt(self.config.head_dim)
+        scores = query @ np.swapaxes(key, -1, -2)
+        if self.config.scale_attention_scores:
+            scores = scores / np.sqrt(self.config.head_dim)
         mask = self._attention_mask(
             query_length=hidden_states.shape[0],
             key_length=key.shape[1],

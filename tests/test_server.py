@@ -42,7 +42,7 @@ class ServerTest(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            conn = HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
             conn.request(
                 "POST",
                 "/generate",

@@ -104,6 +104,17 @@ With `--profile`, the benchmark also prints internal prefill and per-token
 decode timing for embedding, Transformer blocks, attention, MLP, final norm,
 and LM head.
 
+Compare NumPy GPT-Neo logits with Hugging Face Transformers:
+
+```bash
+python3 -m pip install '.[compare]'
+PYTHONPATH=src python3 -m tiny_invoker compare-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --top-k 10
+```
+
+This prints max/mean absolute logit error, top-1 agreement, top-k overlap, and
+a token-level top-k table. Use `--fail-on-mismatch` when you want the command to
+return a non-zero exit code if the max logit error exceeds `--tolerance`.
+
 Serve the NumPy GPT-Neo runtime locally:
 
 ```bash
@@ -150,10 +161,10 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 
 ## Next Learning Steps
 
-Good next steps after this first runnable version:
+Good next steps after the current GPT-Neo runtime:
 
-1. Replace the bigram model with a tiny neural network layer.
-2. Add tensor operations with NumPy.
-3. Add a Transformer block.
-4. Load weights from a small checkpoint file.
-5. Add batching and key-value cache concepts.
+1. Add a Qwen-style decoder adapter with RMSNorm, RoPE, SwiGLU, and grouped-query attention.
+2. Add streaming HTTP responses and an OpenAI-compatible local endpoint.
+3. Add simple request batching, then continuous batching.
+4. Replace the contiguous K/V cache with a small page/block-based cache manager.
+5. Keep optimizing the profiled hot path: attention, MLP, and LM head.

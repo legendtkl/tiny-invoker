@@ -80,6 +80,7 @@ class NumpyGptNeoConfig:
             window_size=self.window_size,
             activation="gelu_new",
             position_embedding="absolute",
+            scale_attention_scores=False,
         )
 
 

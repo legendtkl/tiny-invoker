@@ -15,6 +15,7 @@ from tiny_invoker.interfaces import ForwardInput, ForwardMode
 from tiny_invoker.sampler import choose_token
 from tiny_invoker.server import serve
 from tiny_invoker.tokenizer import HfTokenizer
+from tiny_invoker.transformer import require_numpy
 from tiny_invoker.weights import convert_torch_weights_to_npz, load_torch_weight_manifest
 
 
@@ -170,6 +171,26 @@ def build_bench_gpt_neo_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--sample-chars", type=int, default=500)
     parser.add_argument("--profile", action="store_true", help="Print internal prefill/decode forward timing.")
+    return parser
+
+
+def build_compare_gpt_neo_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker compare-gpt-neo",
+        description="Compare NumPy GPT-Neo logits against Hugging Face Transformers.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example roneneldan/TinyStories-33M.")
+    parser.add_argument("prompt", help="Prompt text.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--weights-file", default="pytorch_model.npz")
+    parser.add_argument("--weights-path", type=Path, default=None)
+    parser.add_argument("--config-file", default="config.json")
+    parser.add_argument("--torch-weights-file", default="pytorch_model.bin")
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--tolerance", type=float, default=1.0e-3)
+    parser.add_argument("--fail-on-mismatch", action="store_true")
     return parser
 
 
@@ -483,6 +504,118 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
     return 0
 
 
+def run_compare_gpt_neo(argv: list[str]) -> int:
+    parser = build_compare_gpt_neo_parser()
+    args = parser.parse_args(argv)
+    if args.top_k <= 0:
+        raise SystemExit("top_k must be positive.")
+    if args.tolerance < 0:
+        raise SystemExit("tolerance must be non-negative.")
+
+    model, tokenizer, paths = load_numpy_gpt_neo_model(args)
+    token_ids = tokenizer.encode(args.prompt)
+    context_token_ids = token_ids[:] or [tokenizer.bos_id]
+    numpy_output = model.forward(
+        ForwardInput(
+            token_ids=context_token_ids,
+            mode=ForwardMode.PREFILL,
+        )
+    )
+
+    reference_logits = load_hf_reference_gpt_neo_logits(args, context_token_ids)
+    np = require_numpy()
+    numpy_logits = np.asarray(numpy_output.logits, dtype=np.float32)
+    hf_logits = np.asarray(reference_logits, dtype=np.float32)
+    if numpy_logits.shape != hf_logits.shape:
+        raise SystemExit(f"logits shape mismatch: numpy={numpy_logits.shape}, hf={hf_logits.shape}.")
+
+    diff = np.abs(numpy_logits - hf_logits)
+    max_abs_diff = float(np.max(diff))
+    mean_abs_diff = float(np.mean(diff))
+    numpy_top_ids = top_token_ids(numpy_logits, args.top_k)
+    hf_top_ids = top_token_ids(hf_logits, args.top_k)
+    top1_match = bool(numpy_top_ids and hf_top_ids and numpy_top_ids[0] == hf_top_ids[0])
+    top_k_overlap = len(set(numpy_top_ids) & set(hf_top_ids))
+    within_tolerance = max_abs_diff <= args.tolerance
+
+    print("comparison_name: gpt_neo_hf_logits")
+    print(f"model_id: {args.model_id}")
+    print(f"prompt: {args.prompt!r}")
+    print(f"prompt_token_ids: {' '.join(str(token_id) for token_id in context_token_ids)}")
+    print(f"config_file: {paths['config']}")
+    print(f"numpy_weights_file: {paths['weights']}")
+    print(f"torch_weights_file: {model_cache_dir(args.model_id, revision=args.revision, cache_dir=args.cache_dir) / args.torch_weights_file}")
+    print(f"logits_size: {numpy_logits.shape[0]}")
+    print(f"max_abs_diff: {max_abs_diff:.8f}")
+    print(f"mean_abs_diff: {mean_abs_diff:.8f}")
+    print(f"tolerance: {args.tolerance:.8f}")
+    print(f"within_tolerance: {within_tolerance}")
+    print(f"top1_match: {top1_match}")
+    print(f"top_{args.top_k}_overlap: {top_k_overlap}/{args.top_k}")
+    print("top_tokens:")
+    print("rank numpy_id numpy_text numpy_logit hf_logit_at_numpy_id abs_diff hf_rank_id hf_rank_text")
+    for rank, (numpy_id, hf_id) in enumerate(zip(numpy_top_ids, hf_top_ids), start=1):
+        numpy_logit = float(numpy_logits[numpy_id])
+        hf_logit_at_numpy_id = float(hf_logits[numpy_id])
+        token_diff = abs(numpy_logit - hf_logit_at_numpy_id)
+        print(
+            f"{rank} "
+            f"{numpy_id} {tokenizer.decode([numpy_id])!r} "
+            f"{numpy_logit:.6f} {hf_logit_at_numpy_id:.6f} {token_diff:.6f} "
+            f"{hf_id} {tokenizer.decode([hf_id])!r}"
+        )
+
+    if args.fail_on_mismatch and not within_tolerance:
+        return 1
+    return 0
+
+
+def load_hf_reference_gpt_neo_logits(args: argparse.Namespace, token_ids: list[int]) -> Any:
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM
+        from transformers.utils import logging as transformers_logging
+    except ImportError as error:
+        raise RuntimeError(
+            "HF comparison requires optional compare dependencies. Install them with "
+            "`python3 -m pip install '.[compare]'` from this repository."
+        ) from error
+
+    download_model_file(
+        args.model_id,
+        args.config_file,
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+    )
+    download_model_file(
+        args.model_id,
+        args.torch_weights_file,
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+        timeout=300.0,
+    )
+    model_dir = model_cache_dir(args.model_id, revision=args.revision, cache_dir=args.cache_dir)
+    transformers_logging.set_verbosity_error()
+    transformers_logging.disable_progress_bar()
+    reference_model = AutoModelForCausalLM.from_pretrained(
+        str(model_dir),
+        local_files_only=True,
+    )
+    reference_model.eval()
+    input_ids = torch.tensor([token_ids], dtype=torch.long)
+    with torch.no_grad():
+        output = reference_model(input_ids=input_ids)
+    return output.logits[0, -1].detach().cpu().numpy()
+
+
+def top_token_ids(logits: Any, top_k: int) -> list[int]:
+    np = require_numpy()
+    limit = min(top_k, int(logits.shape[0]))
+    return [int(token_id) for token_id in np.argsort(logits)[-limit:][::-1]]
+
+
 def elapsed_ms(start_time: float) -> float:
     return (time.perf_counter() - start_time) * 1000.0
 
@@ -622,4 +755,6 @@ def main(argv: list[str] | None = None) -> int:
         return run_serve_gpt_neo(args[1:])
     if args and args[0] == "bench-gpt-neo":
         return run_bench_gpt_neo(args[1:])
+    if args and args[0] == "compare-gpt-neo":
+        return run_compare_gpt_neo(args[1:])
     return run_generate(args)

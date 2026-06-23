@@ -33,6 +33,7 @@ class NumpyGptNeoConfigTest(unittest.TestCase):
         transformer_config = config.to_transformer_config()
         self.assertEqual(transformer_config.num_layers, 1)
         self.assertEqual(transformer_config.position_embedding, "absolute")
+        self.assertFalse(transformer_config.scale_attention_scores)
 
     def test_rejects_non_gpt_neo_config(self) -> None:
         with self.assertRaises(ValueError):

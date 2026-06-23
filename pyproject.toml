@@ -20,6 +20,11 @@ weights = [
     "numpy>=2",
     "torch>=2.6",
 ]
+compare = [
+    "numpy>=2",
+    "torch>=2.6",
+    "transformers>=4.40,<6",
+]
 
 [project.scripts]
 tiny-invoker = "tiny_invoker.cli:main"
