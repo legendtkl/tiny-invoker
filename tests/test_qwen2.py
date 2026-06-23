@@ -136,8 +136,10 @@ class NumpyQwen2LanguageModelTest(unittest.TestCase):
             )
 
         self.assertEqual(prefill.logits.shape, (tokenizer.vocab_size,))
+        self.assertEqual(prefill.logits.dtype, np.float32)
         self.assertEqual(profiled_prefill.logits.shape, (tokenizer.vocab_size,))
         self.assertEqual(multi_token_prefill.logits.shape, (tokenizer.vocab_size,))
+        self.assertEqual(decode.logits.dtype, np.float32)
         self.assertIsNotNone(model.transformer._rope_cos_cache)
         self.assertEqual(model.transformer._rope_cos_cache.shape, (1, 16, 2))
         self.assertIn("attention_ms", profile)

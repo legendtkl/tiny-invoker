@@ -346,11 +346,22 @@ optimizations:
    during decode until the model context limit. This mirrors the learning goal
    behind demand-driven KV memory management in serving runtimes.
 
+5. Float32 activation preservation
+   NumPy 里的 Python 浮点常量很容易把 `float32` tensor 推成 `float64`。runtime
+   会让 attention scale 和 GELU 常量跟随输入 dtype，避免 attention 后的
+   hidden states 污染成双精度，从而让后续 MLP、LM head 和 KV cache 都保持
+   `float32`。
+
+   Python float constants in NumPy can accidentally promote `float32` tensors to
+   `float64`. The runtime keeps attention scaling and GELU constants in the input
+   dtype, so hidden states stay `float32` after attention and later MLP, LM head,
+   and KV cache work stays on the single-precision path.
+
 这些优化主要降低局部 profile 指标，例如 `attention_rope_ms` 和
 `attention_gqa_ms`，或者降低 KV cache 的内存占用。
-整体 TTFT/TPOT 仍可能受 MLP、LM head、NumPy BLAS 调度、系统负载等因素主导。
+整体 TTFT/TPOT 仍可能受 NumPy BLAS 调度、系统负载等因素影响。
 
 These optimizations mainly reduce local profile metrics such as
 `attention_rope_ms` and `attention_gqa_ms`, or reduce KV cache memory footprint.
-Overall TTFT/TPOT may still be dominated by MLP, LM head, NumPy BLAS scheduling,
-and system load.
+Overall TTFT/TPOT may still be affected by NumPy BLAS scheduling and system
+load.

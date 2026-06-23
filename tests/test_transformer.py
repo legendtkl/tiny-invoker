@@ -65,6 +65,7 @@ class GroupedQueryAttentionTest(unittest.TestCase):
         np = require_numpy_for_test()
 
         from tiny_invoker.transformer import (
+            gelu_new,
             grouped_query_attention_context,
             grouped_query_attention_scores,
             repeat_key_value_heads,
@@ -98,6 +99,9 @@ class GroupedQueryAttentionTest(unittest.TestCase):
             group_size=group_size,
         )
 
+        self.assertEqual(grouped_scores.dtype, np.float32)
+        self.assertEqual(grouped_probabilities.dtype, np.float32)
+        self.assertEqual(gelu_new(query).dtype, np.float32)
         np.testing.assert_allclose(grouped_scores, repeated_scores)
         np.testing.assert_allclose(grouped_context, repeated_context)
 

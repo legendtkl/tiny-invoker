@@ -44,8 +44,12 @@ Current checked-in runs:
 - `optimized/qwen2-kv-dynamic.jsonl`: after dynamic KV cache capacity. The
   checked-in short Qwen2 run ends with 16 cached token slots and about 0.73 MB
   of allocated KV cache instead of allocating the full context window upfront.
+- `optimized/qwen2-float32-activations.jsonl`: after preserving float32
+  activations through attention scaling. The checked-in short Qwen2 run improves
+  decode from about 2.46 tok/s to about 66.7 tok/s versus
+  `qwen2-kv-dynamic.jsonl`.
 
-On the checked-in macOS run, P2 reduced the targeted local profile costs such
-as RoPE and GQA bookkeeping, while whole-request wall time was still dominated
-by MLP and LM head matrix multiplications. Treat these records as learning
+On the checked-in macOS run, P2 reduced targeted local profile costs such as
+RoPE and GQA bookkeeping, reduced KV cache memory for short requests, and fixed
+an accidental float64 activation promotion. Treat these records as learning
 evidence, not as stable production performance numbers.

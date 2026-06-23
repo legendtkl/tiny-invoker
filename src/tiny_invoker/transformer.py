@@ -519,11 +519,15 @@ def profile_add(profile: dict[str, float] | None, name: str, start_time: float) 
 
 def gelu_new(hidden_states: Any) -> Any:
     np = require_numpy()
-    return 0.5 * hidden_states * (
-        1.0
+    half = np.asarray(0.5, dtype=hidden_states.dtype)
+    one = np.asarray(1.0, dtype=hidden_states.dtype)
+    cubic_coefficient = np.asarray(0.044715, dtype=hidden_states.dtype)
+    sqrt_two_over_pi = np.asarray(np.sqrt(2.0 / np.pi), dtype=hidden_states.dtype)
+    return half * hidden_states * (
+        one
         + np.tanh(
-            np.sqrt(2.0 / np.pi)
-            * (hidden_states + 0.044715 * np.power(hidden_states, 3))
+            sqrt_two_over_pi
+            * (hidden_states + cubic_coefficient * np.power(hidden_states, 3))
         )
     )
 
@@ -558,7 +562,8 @@ def grouped_query_attention_scores(
         scores = query @ np.swapaxes(key, -1, -2)[:, None, :, :]
         scores = scores.reshape(key.shape[0] * group_size, query.shape[2], key.shape[1])
     if scale_attention_scores:
-        scores = scores / np.sqrt(head_dim)
+        scale = np.asarray(1.0 / np.sqrt(head_dim), dtype=scores.dtype)
+        scores = scores * scale
     return scores
 
 
