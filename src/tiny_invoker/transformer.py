@@ -27,13 +27,24 @@ class TransformerConfig:
     intermediate_size: int
     attention_layers: tuple[str, ...]
     window_size: int
+    num_key_value_heads: int | None = None
     activation: str = "gelu_new"
+    norm_type: str = "layer_norm"
     position_embedding: str = "absolute"
     scale_attention_scores: bool = True
+    rope_theta: float = 10000.0
 
     @property
     def head_dim(self) -> int:
         return self.hidden_size // self.num_heads
+
+    @property
+    def key_value_heads(self) -> int:
+        return self.num_key_value_heads or self.num_heads
+
+    @property
+    def key_value_group_size(self) -> int:
+        return self.num_heads // self.key_value_heads
 
 
 @dataclass(frozen=True)
@@ -43,6 +54,9 @@ class AttentionWeights:
     v_proj_weight_t: Any
     out_proj_weight_t: Any
     out_proj_bias: Any | None
+    q_proj_bias: Any | None = None
+    k_proj_bias: Any | None = None
+    v_proj_bias: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -51,15 +65,17 @@ class MlpWeights:
     fc_bias: Any
     proj_weight_t: Any
     proj_bias: Any
+    gate_weight_t: Any | None = None
+    gate_bias: Any | None = None
 
 
 @dataclass(frozen=True)
 class TransformerBlockWeights:
     ln_1_weight: Any
-    ln_1_bias: Any
+    ln_1_bias: Any | None
     attention: AttentionWeights
     ln_2_weight: Any
-    ln_2_bias: Any
+    ln_2_bias: Any | None
     mlp: MlpWeights
     attention_type: str = "global"
 
@@ -70,7 +86,7 @@ class TransformerWeights:
     position_embedding: Any | None
     layers: tuple[TransformerBlockWeights, ...]
     final_norm_weight: Any
-    final_norm_bias: Any
+    final_norm_bias: Any | None
     lm_head_weight: Any | None = None
     lm_head_weight_t: Any | None = None
 
@@ -115,7 +131,8 @@ class DecoderOnlyTransformer:
         profile_add(profile, "blocks_ms", timer)
 
         timer = profile_start(profile)
-        hidden_states = layer_norm(
+        hidden_states = apply_norm(
+            self.config.norm_type,
             hidden_states,
             self.weights.final_norm_weight,
             self.weights.final_norm_bias,
@@ -139,12 +156,14 @@ class DecoderOnlyTransformer:
     def _embed_tokens(self, token_array: Any, start_position: int, end_position: int) -> Any:
         np = require_numpy()
         hidden_states = self.weights.token_embedding[token_array]
-        if self.config.position_embedding != "absolute":
-            raise ValueError(f"Unsupported position embedding: {self.config.position_embedding}.")
-        if self.weights.position_embedding is None:
-            raise ValueError("Absolute position embedding requires position weights.")
-        position_ids = np.arange(start_position, end_position, dtype=np.int64)
-        return hidden_states + self.weights.position_embedding[position_ids]
+        if self.config.position_embedding == "absolute":
+            if self.weights.position_embedding is None:
+                raise ValueError("Absolute position embedding requires position weights.")
+            position_ids = np.arange(start_position, end_position, dtype=np.int64)
+            return hidden_states + self.weights.position_embedding[position_ids]
+        if self.config.position_embedding in {"none", "rope"}:
+            return hidden_states
+        raise ValueError(f"Unsupported position embedding: {self.config.position_embedding}.")
 
     def _run_blocks(
         self,
@@ -158,7 +177,8 @@ class DecoderOnlyTransformer:
         next_values: list[Any] = []
         for layer_idx, layer_weights in enumerate(self.weights.layers):
             residual = hidden_states
-            attn_input = layer_norm(
+            attn_input = apply_norm(
+                self.config.norm_type,
                 hidden_states,
                 layer_weights.ln_1_weight,
                 layer_weights.ln_1_bias,
@@ -179,7 +199,8 @@ class DecoderOnlyTransformer:
             hidden_states = residual + attn_output
 
             residual = hidden_states
-            mlp_input = layer_norm(
+            mlp_input = apply_norm(
+                self.config.norm_type,
                 hidden_states,
                 layer_weights.ln_2_weight,
                 layer_weights.ln_2_bias,
@@ -205,18 +226,33 @@ class DecoderOnlyTransformer:
         np = require_numpy()
         attention_weights = layer_weights.attention
         query = split_heads(
-            linear_t(hidden_states, attention_weights.q_proj_weight_t),
+            linear_t(
+                hidden_states,
+                attention_weights.q_proj_weight_t,
+                attention_weights.q_proj_bias,
+            ),
             self.config.num_heads,
         )
         key = split_heads(
-            linear_t(hidden_states, attention_weights.k_proj_weight_t),
-            self.config.num_heads,
+            linear_t(
+                hidden_states,
+                attention_weights.k_proj_weight_t,
+                attention_weights.k_proj_bias,
+            ),
+            self.config.key_value_heads,
         )
         value = split_heads(
-            linear_t(hidden_states, attention_weights.v_proj_weight_t),
-            self.config.num_heads,
+            linear_t(
+                hidden_states,
+                attention_weights.v_proj_weight_t,
+                attention_weights.v_proj_bias,
+            ),
+            self.config.key_value_heads,
         )
         end_position = start_position + hidden_states.shape[0]
+        if self.config.position_embedding == "rope":
+            query = apply_rope(query, start_position=start_position, theta=self.config.rope_theta)
+            key = apply_rope(key, start_position=start_position, theta=self.config.rope_theta)
         key_cache = self._updated_kv_cache(
             past_cache=past_key,
             new_values=key,
@@ -231,6 +267,8 @@ class DecoderOnlyTransformer:
         )
         key = key_cache[:, :end_position, :]
         value = value_cache[:, :end_position, :]
+        key = repeat_key_value_heads(key, self.config.key_value_group_size)
+        value = repeat_key_value_heads(value, self.config.key_value_group_size)
 
         scores = query @ np.swapaxes(key, -1, -2)
         if self.config.scale_attention_scores:
@@ -310,6 +348,12 @@ class DecoderOnlyTransformer:
         return mask
 
     def _mlp(self, weights: MlpWeights, hidden_states: Any) -> Any:
+        if self.config.activation == "swiglu":
+            if weights.gate_weight_t is None:
+                raise ValueError("SwiGLU MLP requires gate projection weights.")
+            gate = silu(linear_t(hidden_states, weights.gate_weight_t, weights.gate_bias))
+            up = linear_t(hidden_states, weights.fc_weight_t, weights.fc_bias)
+            return linear_t(gate * up, weights.proj_weight_t, weights.proj_bias)
         hidden_states = linear_t(hidden_states, weights.fc_weight_t, weights.fc_bias)
         hidden_states = self._activate(hidden_states)
         return linear_t(hidden_states, weights.proj_weight_t, weights.proj_bias)
@@ -317,6 +361,8 @@ class DecoderOnlyTransformer:
     def _activate(self, hidden_states: Any) -> Any:
         if self.config.activation == "gelu_new":
             return gelu_new(hidden_states)
+        if self.config.activation == "silu":
+            return silu(hidden_states)
         raise ValueError(f"Unsupported activation: {self.config.activation}.")
 
 
@@ -357,6 +403,11 @@ def gelu_new(hidden_states: Any) -> Any:
     )
 
 
+def silu(hidden_states: Any) -> Any:
+    np = require_numpy()
+    return hidden_states / (1.0 + np.exp(-hidden_states))
+
+
 def split_heads(hidden_states: Any, num_heads: int) -> Any:
     sequence_length, hidden_size = hidden_states.shape
     head_dim = hidden_size // num_heads
@@ -368,6 +419,41 @@ def merge_heads(hidden_states: Any) -> Any:
     return hidden_states.transpose(1, 0, 2).reshape(sequence_length, num_heads * head_dim)
 
 
+def repeat_key_value_heads(hidden_states: Any, repeat_count: int) -> Any:
+    if repeat_count == 1:
+        return hidden_states
+    np = require_numpy()
+    return np.repeat(hidden_states, repeat_count, axis=0)
+
+
+def apply_rope(hidden_states: Any, start_position: int, theta: float) -> Any:
+    np = require_numpy()
+    head_dim = hidden_states.shape[-1]
+    if head_dim % 2 != 0:
+        raise ValueError("RoPE requires an even head dimension.")
+    positions = np.arange(
+        start_position,
+        start_position + hidden_states.shape[1],
+        dtype=np.float32,
+    )
+    inv_freq = 1.0 / (
+        theta ** (np.arange(0, head_dim, 2, dtype=np.float32) / float(head_dim))
+    )
+    freqs = positions[:, None] * inv_freq[None, :]
+    rope_angles = np.concatenate([freqs, freqs], axis=-1)
+    cos = np.cos(rope_angles)[None, :, :]
+    sin = np.sin(rope_angles)[None, :, :]
+    return hidden_states * cos + rotate_half(hidden_states) * sin
+
+
+def rotate_half(hidden_states: Any) -> Any:
+    np = require_numpy()
+    half = hidden_states.shape[-1] // 2
+    first_half = hidden_states[..., :half]
+    second_half = hidden_states[..., half:]
+    return np.concatenate([-second_half, first_half], axis=-1)
+
+
 def softmax(values: Any, axis: int = -1) -> Any:
     np = require_numpy()
     shifted = values - np.max(values, axis=axis, keepdims=True)
@@ -375,9 +461,32 @@ def softmax(values: Any, axis: int = -1) -> Any:
     return exp_values / np.sum(exp_values, axis=axis, keepdims=True)
 
 
-def layer_norm(hidden_states: Any, weight: Any, bias: Any, epsilon: float) -> Any:
+def apply_norm(
+    norm_type: str,
+    hidden_states: Any,
+    weight: Any,
+    bias: Any | None,
+    epsilon: float,
+) -> Any:
+    if norm_type == "layer_norm":
+        return layer_norm(hidden_states, weight, bias, epsilon)
+    if norm_type == "rms_norm":
+        return rms_norm(hidden_states, weight, epsilon)
+    raise ValueError(f"Unsupported norm type: {norm_type}.")
+
+
+def layer_norm(hidden_states: Any, weight: Any, bias: Any | None, epsilon: float) -> Any:
     np = require_numpy()
     mean = np.mean(hidden_states, axis=-1, keepdims=True)
     variance = np.mean((hidden_states - mean) ** 2, axis=-1, keepdims=True)
     normalized = (hidden_states - mean) / np.sqrt(variance + epsilon)
-    return normalized * weight + bias
+    output = normalized * weight
+    if bias is not None:
+        output = output + bias
+    return output
+
+
+def rms_norm(hidden_states: Any, weight: Any, epsilon: float) -> Any:
+    np = require_numpy()
+    variance = np.mean(hidden_states * hidden_states, axis=-1, keepdims=True)
+    return hidden_states / np.sqrt(variance + epsilon) * weight

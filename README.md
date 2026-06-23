@@ -127,10 +127,12 @@ curl -X POST http://127.0.0.1:8000/generate \
 The GPT-Neo runtime now uses a small decoder-only Transformer backbone. GPT-Neo
 specific code maps Hugging Face config and weight names into that backbone, while
 the shared Transformer code runs embedding, attention, MLP, residual paths, final
-norm, LM head, and per-layer K/V cache for a single request on CPU. It is built
-for learning, not vLLM/SGLang-style batching or optimized serving yet. The hot
-path caches transposed linear weights and exposes optional profiling so decode
-performance work has a repeatable baseline.
+norm, LM head, and per-layer K/V cache for a single request on CPU. The shared
+backbone also has the Qwen2-style pieces needed by modern decoder models:
+RMSNorm, RoPE, SwiGLU, and grouped-query attention. It is built for learning,
+not vLLM/SGLang-style batching or optimized serving yet. The hot path caches
+transposed linear weights and exposes optional profiling so decode performance
+work has a repeatable baseline.
 
 To see each generation step:
 
@@ -151,6 +153,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 - `src/tiny_invoker/weights.py`: inspects PyTorch weight names, shapes, and dtypes.
 - `src/tiny_invoker/transformer.py`: shared decoder-only Transformer execution code.
 - `src/tiny_invoker/gpt_neo.py`: adapts GPT-Neo config and NumPy weights into the shared Transformer.
+- `src/tiny_invoker/qwen2.py`: adapts Qwen2 config and NumPy weights into the shared Transformer.
 - `src/tiny_invoker/interfaces.py`: defines the minimum model interface.
 - `src/tiny_invoker/model.py`: a tiny bigram language model.
 - `src/tiny_invoker/sampler.py`: softmax, top-k filtering, and token sampling.
@@ -163,7 +166,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 
 Good next steps after the current GPT-Neo runtime:
 
-1. Add a Qwen-style decoder adapter with RMSNorm, RoPE, SwiGLU, and grouped-query attention.
+1. Add safetensors weight loading plus CLI commands for real Qwen2 generation and HF comparison.
 2. Add streaming HTTP responses and an OpenAI-compatible local endpoint.
 3. Add simple request batching, then continuous batching.
 4. Replace the contiguous K/V cache with a small page/block-based cache manager.

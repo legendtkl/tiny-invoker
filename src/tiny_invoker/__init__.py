@@ -6,6 +6,7 @@ from tiny_invoker.gpt_neo import NumpyGptNeoCache, NumpyGptNeoConfig, NumpyGptNe
 from tiny_invoker.hf import HfModelInfo, download_model_file, fetch_model_info
 from tiny_invoker.interfaces import ForwardInput, ForwardMode, ForwardOutput, KVCache, LanguageModel
 from tiny_invoker.model import BigramKVCache, BigramLanguageModel
+from tiny_invoker.qwen2 import NumpyQwen2Cache, NumpyQwen2Config, NumpyQwen2LanguageModel
 from tiny_invoker.server import GenerateRequest, TinyInvokerServer, serve
 from tiny_invoker.tokenizer import CharTokenizer, HfTokenizer, TextTokenizer
 from tiny_invoker.weights import (
@@ -34,6 +35,9 @@ __all__ = [
     "NumpyGptNeoCache",
     "NumpyGptNeoConfig",
     "NumpyGptNeoLanguageModel",
+    "NumpyQwen2Cache",
+    "NumpyQwen2Config",
+    "NumpyQwen2LanguageModel",
     "TinyInvokerServer",
     "TextTokenizer",
     "WeightManifest",
