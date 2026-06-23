@@ -223,7 +223,7 @@ def choose_token_numpy(
     if top_k is not None and top_k <= 0:
         raise ValueError("top_k must be positive when provided.")
     if temperature == 0:
-        return int(np.argmax(masked_numpy_logits(logits, blocked_token_ids=blocked_token_ids)))
+        return argmax_numpy(logits, blocked_token_ids=blocked_token_ids)
 
     filtered_logits = filter_top_k_numpy(
         logits,
@@ -235,6 +235,21 @@ def choose_token_numpy(
     cumulative = np.cumsum(probabilities)
     token_id = int(np.searchsorted(cumulative, threshold, side="left"))
     return min(token_id, probabilities.size - 1)
+
+
+def argmax_numpy(logits: Any, blocked_token_ids: Iterable[int] = ()) -> int:
+    np = require_numpy()
+    values = np.asarray(logits)
+    if values.ndim != 1:
+        raise ValueError("Sampler expects 1-D logits.")
+
+    blocked_ids = sorted(valid_token_id_set(blocked_token_ids, values.size))
+    if not blocked_ids:
+        return int(np.argmax(values))
+
+    masked_values = values.astype(np.float64, copy=True)
+    masked_values[np.asarray(blocked_ids, dtype=np.int64)] = -np.inf
+    return int(np.argmax(masked_values))
 
 
 def top_candidates_numpy(

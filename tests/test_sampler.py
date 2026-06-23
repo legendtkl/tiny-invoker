@@ -82,6 +82,24 @@ class SamplerTest(unittest.TestCase):
         self.assertEqual(float(logits[0]), 10.0)
         self.assertEqual(filtered[0], float("-inf"))
 
+    def test_numpy_zero_temperature_without_blocked_tokens_skips_logits_copy(self) -> None:
+        np = require_numpy_for_test()
+        import tiny_invoker.sampler as sampler
+
+        logits = np.asarray([1.0, 3.0, 2.0], dtype=np.float32)
+        original_copy = sampler.numpy_logits_copy
+
+        def fail_if_called(logits):
+            raise AssertionError("greedy argmax should not copy logits")
+
+        sampler.numpy_logits_copy = fail_if_called
+        try:
+            token_id = sampler.choose_token(logits, rng=random.Random(0), temperature=0)
+        finally:
+            sampler.numpy_logits_copy = original_copy
+
+        self.assertEqual(token_id, 1)
+
     def test_numpy_top_candidates_are_sorted(self) -> None:
         np = require_numpy_for_test()
         logits = np.asarray([1.0, 3.0, 2.0], dtype=np.float32)
