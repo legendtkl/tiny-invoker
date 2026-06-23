@@ -97,6 +97,11 @@ class DecoderOnlyTransformer:
     weights: TransformerWeights
     _rope_cos_cache: Any | None = field(default=None, init=False, repr=False)
     _rope_sin_cache: Any | None = field(default=None, init=False, repr=False)
+    _attention_mask_cache: dict[tuple[int, int, int, str], Any] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     def forward(
         self,
@@ -403,6 +408,10 @@ class DecoderOnlyTransformer:
         start_position: int,
         attention_type: str,
     ) -> Any | None:
+        cache_key = (query_length, key_length, start_position, attention_type)
+        if query_length > 1 and cache_key in self._attention_mask_cache:
+            return self._attention_mask_cache[cache_key]
+
         np = require_numpy()
         if query_length == 1 and key_length == start_position + 1:
             if attention_type != "local":
@@ -417,6 +426,10 @@ class DecoderOnlyTransformer:
         mask = key_positions <= query_positions
         if attention_type == "local":
             mask = mask & (key_positions > query_positions - self.config.window_size)
+        if query_length > 1:
+            if len(self._attention_mask_cache) >= 8:
+                self._attention_mask_cache.clear()
+            self._attention_mask_cache[cache_key] = mask
         return mask
 
     def _mlp(

@@ -117,6 +117,18 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
                 start_position=10,
                 attention_type="local",
             )
+            prefill_mask = model.transformer._attention_mask(
+                query_length=3,
+                key_length=3,
+                start_position=0,
+                attention_type="global",
+            )
+            cached_prefill_mask = model.transformer._attention_mask(
+                query_length=3,
+                key_length=3,
+                start_position=0,
+                attention_type="global",
+            )
             profiled_prefill, profile = model.profile_forward(
                 ForwardInput(
                     token_ids=tokenizer.encode("a"),
@@ -141,6 +153,7 @@ class NumpyGptNeoLanguageModelTest(unittest.TestCase):
             local_decode_mask.tolist(),
             [[False, False, False, True, True, True, True, True, True, True, True]],
         )
+        self.assertIs(prefill_mask, cached_prefill_mask)
         self.assertEqual(profiled_prefill.logits.shape, (tokenizer.vocab_size,))
         self.assertIn("attention_ms", profile)
         self.assertIn("attention_qkv_proj_ms", profile)
