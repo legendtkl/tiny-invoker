@@ -9,6 +9,7 @@ benchmarks/
   baseline/
     gpt-neo.jsonl
     qwen2.jsonl
+    qwen2-1.5b.jsonl
     server.jsonl
   optimized/
     qwen2-p2.jsonl
@@ -22,6 +23,14 @@ Recommended Qwen2 baseline prompts:
 PYTHONPATH=src python3 -m tiny_invoker bench-qwen2 Qwen/Qwen2.5-0.5B "Hello" --max-new-tokens 8 --temperature 0 --profile --repeats 3 --json-output benchmarks/baseline/qwen2.jsonl
 PYTHONPATH=src python3 -m tiny_invoker bench-qwen2 Qwen/Qwen2.5-0.5B "Explain KV cache in one paragraph." --max-new-tokens 32 --temperature 0 --profile --repeats 3 --json-output benchmarks/baseline/qwen2.jsonl
 PYTHONPATH=src python3 -m tiny_invoker bench-qwen2 Qwen/Qwen2.5-0.5B "Write a short story about a robot learning to read." --max-new-tokens 64 --temperature 0 --profile --repeats 3 --json-output benchmarks/baseline/qwen2.jsonl
+```
+
+Recommended larger Qwen2 baseline prompts:
+
+```bash
+PYTHONPATH=src python3 -m tiny_invoker bench-qwen2 Qwen/Qwen2.5-1.5B "Hello" --max-new-tokens 8 --temperature 0 --profile --json-output benchmarks/baseline/qwen2-1.5b.jsonl
+PYTHONPATH=src python3 -m tiny_invoker bench-qwen2 Qwen/Qwen2.5-1.5B "Explain KV cache in one paragraph." --max-new-tokens 32 --temperature 0 --profile --json-output benchmarks/baseline/qwen2-1.5b.jsonl
+PYTHONPATH=src python3 -m tiny_invoker bench-qwen2 Qwen/Qwen2.5-1.5B "Write a short story about a robot learning to read." --max-new-tokens 64 --temperature 0 --profile --json-output benchmarks/baseline/qwen2-1.5b.jsonl
 ```
 
 Compare a baseline with a later optimized run:
@@ -39,6 +48,9 @@ usually gives a better learning signal than a single run.
 Current checked-in runs:
 
 - `baseline/qwen2.jsonl`: initial Qwen2 baseline before P2 kernel work.
+- `baseline/qwen2-1.5b.jsonl`: Qwen2.5-1.5B run after the current float32
+  activation fix. The checked-in macOS CPU run decodes at about 24 tok/s on the
+  32-token and 64-token prompts, with decode MLP around 27-28 ms/token.
 - `optimized/qwen2-p2.jsonl`: after RoPE cache, grouped-query attention without
   materialized K/V repeats, and reusable prefill attention masks.
 - `optimized/qwen2-kv-dynamic.jsonl`: after dynamic KV cache capacity. The
