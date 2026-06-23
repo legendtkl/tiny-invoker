@@ -81,6 +81,16 @@ Convert PyTorch weights to a NumPy file for the later runtime path:
 PYTHONPATH=src python3 -m tiny_invoker convert-weights roneneldan/TinyStories-33M
 ```
 
+Convert a single-file safetensors checkpoint to NumPy:
+
+```bash
+python3 -m pip install '.[weights]'
+PYTHONPATH=src python3 -m tiny_invoker convert-safetensors Qwen/Qwen2.5-0.5B --filename model.safetensors
+```
+
+This currently expects one safetensors file. Sharded checkpoints with
+`model.safetensors.index.json` need a later shard-merging step.
+
 Probe the NumPy GPT-Neo runtime skeleton:
 
 ```bash
@@ -114,6 +124,15 @@ PYTHONPATH=src python3 -m tiny_invoker compare-gpt-neo roneneldan/TinyStories-33
 This prints max/mean absolute logit error, top-1 agreement, top-k overlap, and
 a token-level top-k table. Use `--fail-on-mismatch` when you want the command to
 return a non-zero exit code if the max logit error exceeds `--tolerance`.
+
+Probe, generate, or compare with the NumPy Qwen2 runtime after converting the
+safetensors weights:
+
+```bash
+PYTHONPATH=src python3 -m tiny_invoker probe-qwen2 Qwen/Qwen2.5-0.5B "Hello"
+PYTHONPATH=src python3 -m tiny_invoker generate-qwen2 Qwen/Qwen2.5-0.5B "Hello" --max-new-tokens 8 --temperature 0
+PYTHONPATH=src python3 -m tiny_invoker compare-qwen2 Qwen/Qwen2.5-0.5B "Hello" --top-k 10
+```
 
 Serve the NumPy GPT-Neo runtime locally:
 
@@ -164,10 +183,10 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 
 ## Next Learning Steps
 
-Good next steps after the current GPT-Neo runtime:
+Good next steps after the current GPT-Neo and Qwen2 runtime:
 
-1. Add safetensors weight loading plus CLI commands for real Qwen2 generation and HF comparison.
-2. Add streaming HTTP responses and an OpenAI-compatible local endpoint.
-3. Add simple request batching, then continuous batching.
-4. Replace the contiguous K/V cache with a small page/block-based cache manager.
-5. Keep optimizing the profiled hot path: attention, MLP, and LM head.
+1. Add safetensors index/shard merging for larger Qwen checkpoints.
+2. Add Qwen3 dense support, including QK-Norm.
+3. Add streaming HTTP responses and an OpenAI-compatible local endpoint.
+4. Add simple request batching, then continuous batching.
+5. Replace the contiguous K/V cache with a small page/block-based cache manager.

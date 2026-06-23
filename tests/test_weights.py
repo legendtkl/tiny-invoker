@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from tiny_invoker.weights import (
+    convert_safetensors_weights_to_npz,
     manifest_from_state_dict,
     save_npz_weights,
     should_export_tensor,
@@ -100,6 +101,37 @@ class WeightsTest(unittest.TestCase):
 
             self.assertTrue(output.exists())
             self.assertEqual(manifest.total_tensors, 1)
+
+    def test_converts_safetensors_to_npz(self) -> None:
+        try:
+            import numpy as np
+            import torch
+            from safetensors.torch import save_file
+        except ImportError:
+            self.skipTest("safetensors conversion requires optional weights dependencies.")
+
+        with TemporaryDirectory() as tmp_dir:
+            input_path = Path(tmp_dir) / "model.safetensors"
+            output_path = Path(tmp_dir) / "model.npz"
+            save_file(
+                {
+                    "model.embed_tokens.weight": torch.ones((2, 3), dtype=torch.float32),
+                    "model.norm.weight": torch.ones((3,), dtype=torch.bfloat16),
+                },
+                str(input_path),
+            )
+
+            manifest = convert_safetensors_weights_to_npz(
+                input_path,
+                output_path,
+                compressed=False,
+            )
+
+            self.assertTrue(output_path.exists())
+            self.assertEqual(manifest.total_tensors, 2)
+            with np.load(output_path, allow_pickle=False) as payload:
+                self.assertEqual(payload["model.embed_tokens.weight"].shape, (2, 3))
+                self.assertEqual(payload["model.norm.weight"].dtype, np.float32)
 
 
 if __name__ == "__main__":

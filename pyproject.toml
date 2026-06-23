@@ -18,10 +18,12 @@ runtime = [
 ]
 weights = [
     "numpy>=2",
+    "safetensors>=0.4",
     "torch>=2.6",
 ]
 compare = [
     "numpy>=2",
+    "safetensors>=0.4",
     "torch>=2.6",
     "transformers>=4.40,<6",
 ]

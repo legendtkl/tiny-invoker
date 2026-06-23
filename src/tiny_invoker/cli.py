@@ -12,11 +12,17 @@ from tiny_invoker.engine import GenerationConfig, InferenceEngine
 from tiny_invoker.gpt_neo import NumpyGptNeoLanguageModel
 from tiny_invoker.hf import download_model_file, fetch_model_info, model_cache_dir
 from tiny_invoker.interfaces import ForwardInput, ForwardMode
+from tiny_invoker.qwen2 import NumpyQwen2LanguageModel
 from tiny_invoker.sampler import choose_token
 from tiny_invoker.server import serve
 from tiny_invoker.tokenizer import HfTokenizer
 from tiny_invoker.transformer import require_numpy
-from tiny_invoker.weights import convert_torch_weights_to_npz, load_torch_weight_manifest
+from tiny_invoker.weights import (
+    convert_safetensors_weights_to_npz,
+    convert_torch_weights_to_npz,
+    load_safetensors_weight_manifest,
+    load_torch_weight_manifest,
+)
 
 
 PROFILE_METRIC_NAMES = (
@@ -90,6 +96,36 @@ def build_convert_weights_parser() -> argparse.ArgumentParser:
     parser.add_argument("--endpoint", default="https://huggingface.co")
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--filename", default="pytorch_model.bin")
+    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--uncompressed", action="store_true", help="Use np.savez instead of np.savez_compressed.")
+    parser.add_argument("--limit", type=int, default=20, help="Maximum converted tensor lines to print. Use 0 for all.")
+    return parser
+
+
+def build_inspect_safetensors_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker inspect-safetensors",
+        description="Inspect a Hugging Face safetensors weight file.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example Qwen/Qwen2.5-0.5B.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--filename", default="model.safetensors")
+    parser.add_argument("--limit", type=int, default=80, help="Maximum tensor lines to print. Use 0 for all.")
+    return parser
+
+
+def build_convert_safetensors_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker convert-safetensors",
+        description="Convert a Hugging Face safetensors state_dict to a NumPy .npz file.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example Qwen/Qwen2.5-0.5B.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--filename", default="model.safetensors")
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--uncompressed", action="store_true", help="Use np.savez instead of np.savez_compressed.")
     parser.add_argument("--limit", type=int, default=20, help="Maximum converted tensor lines to print. Use 0 for all.")
@@ -188,6 +224,63 @@ def build_compare_gpt_neo_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weights-path", type=Path, default=None)
     parser.add_argument("--config-file", default="config.json")
     parser.add_argument("--torch-weights-file", default="pytorch_model.bin")
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--tolerance", type=float, default=1.0e-3)
+    parser.add_argument("--fail-on-mismatch", action="store_true")
+    return parser
+
+
+def build_probe_qwen2_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker probe-qwen2",
+        description="Run the NumPy Qwen2 runtime and print logits metadata.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example Qwen/Qwen2.5-0.5B.")
+    parser.add_argument("prompt", help="Prompt text to tokenize and run through the runtime.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--weights-file", default="model.npz")
+    parser.add_argument("--weights-path", type=Path, default=None)
+    parser.add_argument("--config-file", default="config.json")
+    return parser
+
+
+def build_generate_qwen2_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker generate-qwen2",
+        description="Generate text with the NumPy Qwen2 runtime.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example Qwen/Qwen2.5-0.5B.")
+    parser.add_argument("prompt", help="Prompt text.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--weights-file", default="model.npz")
+    parser.add_argument("--weights-path", type=Path, default=None)
+    parser.add_argument("--config-file", default="config.json")
+    parser.add_argument("--max-new-tokens", type=int, default=20)
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--trace", action="store_true")
+    return parser
+
+
+def build_compare_qwen2_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker compare-qwen2",
+        description="Compare NumPy Qwen2 logits against Hugging Face Transformers.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example Qwen/Qwen2.5-0.5B.")
+    parser.add_argument("prompt", help="Prompt text.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--weights-file", default="model.npz")
+    parser.add_argument("--weights-path", type=Path, default=None)
+    parser.add_argument("--config-file", default="config.json")
+    parser.add_argument("--safetensors-file", default="model.safetensors")
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--tolerance", type=float, default=1.0e-3)
     parser.add_argument("--fail-on-mismatch", action="store_true")
@@ -307,6 +400,52 @@ def run_convert_weights(argv: list[str]) -> int:
     return 0
 
 
+def run_inspect_safetensors(argv: list[str]) -> int:
+    parser = build_inspect_safetensors_parser()
+    args = parser.parse_args(argv)
+
+    weights_path = download_model_file(
+        args.model_id,
+        args.filename,
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+        timeout=300.0,
+    )
+    manifest = load_safetensors_weight_manifest(weights_path)
+    limit = None if args.limit == 0 else args.limit
+    for line in manifest.summary_lines(limit=limit):
+        print(line)
+    return 0
+
+
+def run_convert_safetensors(argv: list[str]) -> int:
+    parser = build_convert_safetensors_parser()
+    args = parser.parse_args(argv)
+
+    weights_path = download_model_file(
+        args.model_id,
+        args.filename,
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+        timeout=300.0,
+    )
+    output_path = args.output
+    if output_path is None:
+        output_path = weights_path.with_suffix(".npz")
+
+    manifest = convert_safetensors_weights_to_npz(
+        weights_path,
+        output_path,
+        compressed=not args.uncompressed,
+    )
+    limit = None if args.limit == 0 else args.limit
+    for line in manifest.summary_lines(limit=limit):
+        print(line)
+    return 0
+
+
 def run_probe_gpt_neo(argv: list[str]) -> int:
     parser = build_probe_gpt_neo_parser()
     args = parser.parse_args(argv)
@@ -368,11 +507,105 @@ def load_numpy_gpt_neo_model(args: argparse.Namespace) -> tuple[NumpyGptNeoLangu
     return model, tokenizer, {"config": config_path, "tokenizer": tokenizer_path, "weights": weights_path}
 
 
+def run_probe_qwen2(argv: list[str]) -> int:
+    parser = build_probe_qwen2_parser()
+    args = parser.parse_args(argv)
+
+    model, tokenizer, paths = load_numpy_qwen2_model(args)
+    token_ids = tokenizer.encode(args.prompt)
+    output = model.forward(
+        ForwardInput(
+            token_ids=token_ids,
+            mode=ForwardMode.PREFILL,
+        )
+    )
+    logits = output.logits
+    print(f"config_file: {paths['config']}")
+    print(f"weights_file: {paths['weights']}")
+    print(f"prompt_token_ids: {' '.join(str(token_id) for token_id in token_ids)}")
+    print(f"logits_size: {len(logits)}")
+    print(f"cache_tokens: {len(output.cache.token_ids)}")
+    top_id = max(range(len(logits)), key=lambda token_id: logits[token_id])
+    print(f"top_token_id: {top_id}")
+    print(f"top_token_text: {tokenizer.decode([top_id])!r}")
+    return 0
+
+
+def load_numpy_qwen2_model(args: argparse.Namespace) -> tuple[NumpyQwen2LanguageModel, HfTokenizer, dict[str, Path]]:
+    config_path = download_model_file(
+        args.model_id,
+        args.config_file,
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+    )
+    tokenizer_path = download_model_file(
+        args.model_id,
+        "tokenizer.json",
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+    )
+    weights_path = args.weights_path
+    if weights_path is None:
+        weights_path = model_cache_dir(
+            args.model_id,
+            revision=args.revision,
+            cache_dir=args.cache_dir,
+        ) / args.weights_file
+    if not weights_path.exists():
+        raise SystemExit(
+            f"Missing NumPy weights file: {weights_path}\n"
+            "Run `tiny-invoker convert-safetensors <model_id>` first."
+        )
+
+    tokenizer = HfTokenizer.from_file(tokenizer_path)
+    model = NumpyQwen2LanguageModel.from_files(
+        config_path=config_path,
+        weights_path=weights_path,
+        tokenizer=tokenizer,
+    )
+    return model, tokenizer, {"config": config_path, "tokenizer": tokenizer_path, "weights": weights_path}
+
+
 def run_generate_gpt_neo(argv: list[str]) -> int:
     parser = build_generate_gpt_neo_parser()
     args = parser.parse_args(argv)
 
     model, _, _ = load_numpy_gpt_neo_model(args)
+    top_k = args.top_k if args.top_k > 0 else None
+    engine = InferenceEngine(model=model)
+    result = engine.generate(
+        args.prompt,
+        config=GenerationConfig(
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=top_k,
+            seed=args.seed,
+            trace=args.trace,
+        ),
+    )
+    print(result.text)
+    if args.trace:
+        print()
+        print("trace:")
+        for step in result.steps:
+            candidates = ", ".join(
+                f"{token!r}:{probability:.2f}"
+                for token, probability in step.candidates
+            )
+            print(
+                f"{step.step:02d}. prev={step.previous_token!r} "
+                f"next={step.chosen_token!r} candidates=[{candidates}]"
+            )
+    return 0
+
+
+def run_generate_qwen2(argv: list[str]) -> int:
+    parser = build_generate_qwen2_parser()
+    args = parser.parse_args(argv)
+
+    model, _, _ = load_numpy_qwen2_model(args)
     top_k = args.top_k if args.top_k > 0 else None
     engine = InferenceEngine(model=model)
     result = engine.generate(
@@ -570,6 +803,72 @@ def run_compare_gpt_neo(argv: list[str]) -> int:
     return 0
 
 
+def run_compare_qwen2(argv: list[str]) -> int:
+    parser = build_compare_qwen2_parser()
+    args = parser.parse_args(argv)
+    if args.top_k <= 0:
+        raise SystemExit("top_k must be positive.")
+    if args.tolerance < 0:
+        raise SystemExit("tolerance must be non-negative.")
+
+    model, tokenizer, paths = load_numpy_qwen2_model(args)
+    token_ids = tokenizer.encode(args.prompt)
+    context_token_ids = token_ids[:] or [tokenizer.bos_id]
+    numpy_output = model.forward(
+        ForwardInput(
+            token_ids=context_token_ids,
+            mode=ForwardMode.PREFILL,
+        )
+    )
+
+    reference_logits = load_hf_reference_qwen2_logits(args, context_token_ids)
+    np = require_numpy()
+    numpy_logits = np.asarray(numpy_output.logits, dtype=np.float32)
+    hf_logits = np.asarray(reference_logits, dtype=np.float32)
+    if numpy_logits.shape != hf_logits.shape:
+        raise SystemExit(f"logits shape mismatch: numpy={numpy_logits.shape}, hf={hf_logits.shape}.")
+
+    diff = np.abs(numpy_logits - hf_logits)
+    max_abs_diff = float(np.max(diff))
+    mean_abs_diff = float(np.mean(diff))
+    numpy_top_ids = top_token_ids(numpy_logits, args.top_k)
+    hf_top_ids = top_token_ids(hf_logits, args.top_k)
+    top1_match = bool(numpy_top_ids and hf_top_ids and numpy_top_ids[0] == hf_top_ids[0])
+    top_k_overlap = len(set(numpy_top_ids) & set(hf_top_ids))
+    within_tolerance = max_abs_diff <= args.tolerance
+
+    print("comparison_name: qwen2_hf_logits")
+    print(f"model_id: {args.model_id}")
+    print(f"prompt: {args.prompt!r}")
+    print(f"prompt_token_ids: {' '.join(str(token_id) for token_id in context_token_ids)}")
+    print(f"config_file: {paths['config']}")
+    print(f"numpy_weights_file: {paths['weights']}")
+    print(f"safetensors_file: {model_cache_dir(args.model_id, revision=args.revision, cache_dir=args.cache_dir) / args.safetensors_file}")
+    print(f"logits_size: {numpy_logits.shape[0]}")
+    print(f"max_abs_diff: {max_abs_diff:.8f}")
+    print(f"mean_abs_diff: {mean_abs_diff:.8f}")
+    print(f"tolerance: {args.tolerance:.8f}")
+    print(f"within_tolerance: {within_tolerance}")
+    print(f"top1_match: {top1_match}")
+    print(f"top_{args.top_k}_overlap: {top_k_overlap}/{args.top_k}")
+    print("top_tokens:")
+    print("rank numpy_id numpy_text numpy_logit hf_logit_at_numpy_id abs_diff hf_rank_id hf_rank_text")
+    for rank, (numpy_id, hf_id) in enumerate(zip(numpy_top_ids, hf_top_ids), start=1):
+        numpy_logit = float(numpy_logits[numpy_id])
+        hf_logit_at_numpy_id = float(hf_logits[numpy_id])
+        token_diff = abs(numpy_logit - hf_logit_at_numpy_id)
+        print(
+            f"{rank} "
+            f"{numpy_id} {tokenizer.decode([numpy_id])!r} "
+            f"{numpy_logit:.6f} {hf_logit_at_numpy_id:.6f} {token_diff:.6f} "
+            f"{hf_id} {tokenizer.decode([hf_id])!r}"
+        )
+
+    if args.fail_on_mismatch and not within_tolerance:
+        return 1
+    return 0
+
+
 def load_hf_reference_gpt_neo_logits(args: argparse.Namespace, token_ids: list[int]) -> Any:
     try:
         import torch
@@ -591,6 +890,46 @@ def load_hf_reference_gpt_neo_logits(args: argparse.Namespace, token_ids: list[i
     download_model_file(
         args.model_id,
         args.torch_weights_file,
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+        timeout=300.0,
+    )
+    model_dir = model_cache_dir(args.model_id, revision=args.revision, cache_dir=args.cache_dir)
+    transformers_logging.set_verbosity_error()
+    transformers_logging.disable_progress_bar()
+    reference_model = AutoModelForCausalLM.from_pretrained(
+        str(model_dir),
+        local_files_only=True,
+    )
+    reference_model.eval()
+    input_ids = torch.tensor([token_ids], dtype=torch.long)
+    with torch.no_grad():
+        output = reference_model(input_ids=input_ids)
+    return output.logits[0, -1].detach().cpu().numpy()
+
+
+def load_hf_reference_qwen2_logits(args: argparse.Namespace, token_ids: list[int]) -> Any:
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM
+        from transformers.utils import logging as transformers_logging
+    except ImportError as error:
+        raise RuntimeError(
+            "HF comparison requires optional compare dependencies. Install them with "
+            "`python3 -m pip install '.[compare]'` from this repository."
+        ) from error
+
+    download_model_file(
+        args.model_id,
+        args.config_file,
+        endpoint=args.endpoint,
+        revision=args.revision,
+        cache_dir=args.cache_dir,
+    )
+    download_model_file(
+        args.model_id,
+        args.safetensors_file,
         endpoint=args.endpoint,
         revision=args.revision,
         cache_dir=args.cache_dir,
@@ -747,14 +1086,24 @@ def main(argv: list[str] | None = None) -> int:
         return run_inspect_weights(args[1:])
     if args and args[0] == "convert-weights":
         return run_convert_weights(args[1:])
+    if args and args[0] == "inspect-safetensors":
+        return run_inspect_safetensors(args[1:])
+    if args and args[0] == "convert-safetensors":
+        return run_convert_safetensors(args[1:])
     if args and args[0] == "probe-gpt-neo":
         return run_probe_gpt_neo(args[1:])
+    if args and args[0] == "probe-qwen2":
+        return run_probe_qwen2(args[1:])
     if args and args[0] == "generate-gpt-neo":
         return run_generate_gpt_neo(args[1:])
+    if args and args[0] == "generate-qwen2":
+        return run_generate_qwen2(args[1:])
     if args and args[0] == "serve-gpt-neo":
         return run_serve_gpt_neo(args[1:])
     if args and args[0] == "bench-gpt-neo":
         return run_bench_gpt_neo(args[1:])
     if args and args[0] == "compare-gpt-neo":
         return run_compare_gpt_neo(args[1:])
+    if args and args[0] == "compare-qwen2":
+        return run_compare_qwen2(args[1:])
     return run_generate(args)

@@ -12,7 +12,9 @@ from tiny_invoker.tokenizer import CharTokenizer, HfTokenizer, TextTokenizer
 from tiny_invoker.weights import (
     WeightManifest,
     WeightTensorInfo,
+    convert_safetensors_weights_to_npz,
     convert_torch_weights_to_npz,
+    load_safetensors_weight_manifest,
     load_torch_weight_manifest,
 )
 
@@ -43,9 +45,11 @@ __all__ = [
     "WeightManifest",
     "WeightTensorInfo",
     "build_demo_engine",
+    "convert_safetensors_weights_to_npz",
     "convert_torch_weights_to_npz",
     "download_model_file",
     "fetch_model_info",
+    "load_safetensors_weight_manifest",
     "load_torch_weight_manifest",
     "serve",
 ]

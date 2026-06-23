@@ -88,6 +88,11 @@ def load_torch_weight_manifest(path: str | Path) -> WeightManifest:
     return manifest_from_state_dict(path, state)
 
 
+def load_safetensors_weight_manifest(path: str | Path) -> WeightManifest:
+    state = load_safetensors_state_dict(path)
+    return manifest_from_state_dict(path, state)
+
+
 def load_torch_state_dict(path: str | Path) -> Mapping[str, Any]:
     try:
         import torch
@@ -109,6 +114,21 @@ def load_torch_state_dict(path: str | Path) -> Mapping[str, Any]:
     return state
 
 
+def load_safetensors_state_dict(path: str | Path) -> Mapping[str, Any]:
+    try:
+        from safetensors.torch import load_file
+    except ImportError as error:
+        raise RuntimeError(
+            "safetensors loading requires the optional weights dependencies. "
+            "Install them with `python3 -m pip install '.[weights]'` from this repository."
+        ) from error
+
+    state = load_file(str(Path(path)), device="cpu")
+    if not isinstance(state, Mapping):
+        raise ValueError("Expected a safetensors state_dict mapping.")
+    return state
+
+
 def should_export_tensor(name: str, value: Any) -> bool:
     if not hasattr(value, "shape") or not hasattr(value, "dtype"):
         return False
@@ -127,7 +147,10 @@ def state_dict_to_numpy_arrays(state_dict: Mapping[str, Any]) -> dict[str, Any]:
         if not should_export_tensor(name, value):
             continue
         if hasattr(value, "detach"):
-            value = value.detach().cpu().numpy()
+            value = value.detach().cpu()
+            if str(value.dtype) == "torch.bfloat16":
+                value = value.float()
+            value = value.numpy()
         arrays[name] = value
     return arrays
 
@@ -161,5 +184,15 @@ def convert_torch_weights_to_npz(
     compressed: bool = True,
 ) -> WeightManifest:
     state_dict = load_torch_state_dict(input_path)
+    arrays = state_dict_to_numpy_arrays(state_dict)
+    return save_npz_weights(output_path, arrays, compressed=compressed)
+
+
+def convert_safetensors_weights_to_npz(
+    input_path: str | Path,
+    output_path: str | Path,
+    compressed: bool = True,
+) -> WeightManifest:
+    state_dict = load_safetensors_state_dict(input_path)
     arrays = state_dict_to_numpy_arrays(state_dict)
     return save_npz_weights(output_path, arrays, compressed=compressed)
