@@ -194,6 +194,7 @@ class DecoderOnlyTransformer:
                 start_position=start_position,
                 past_key=layer_past_key,
                 past_value=layer_past_value,
+                profile=profile,
             )
             profile_add(profile, "attention_ms", timer)
             hidden_states = residual + attn_output
@@ -207,7 +208,7 @@ class DecoderOnlyTransformer:
                 epsilon=self.config.layer_norm_epsilon,
             )
             timer = profile_start(profile)
-            mlp_output = self._mlp(layer_weights.mlp, mlp_input)
+            mlp_output = self._mlp(layer_weights.mlp, mlp_input, profile=profile)
             profile_add(profile, "mlp_ms", timer)
             hidden_states = residual + mlp_output
             next_keys.append(key)
@@ -222,9 +223,11 @@ class DecoderOnlyTransformer:
         start_position: int,
         past_key: Any | None,
         past_value: Any | None,
+        profile: dict[str, float] | None = None,
     ) -> tuple[Any, Any, Any]:
         np = require_numpy()
         attention_weights = layer_weights.attention
+        timer = profile_start(profile)
         query = split_heads(
             linear_t(
                 hidden_states,
@@ -249,10 +252,14 @@ class DecoderOnlyTransformer:
             ),
             self.config.key_value_heads,
         )
+        profile_add(profile, "attention_qkv_proj_ms", timer)
         end_position = start_position + hidden_states.shape[0]
         if self.config.position_embedding == "rope":
+            timer = profile_start(profile)
             query = apply_rope(query, start_position=start_position, theta=self.config.rope_theta)
             key = apply_rope(key, start_position=start_position, theta=self.config.rope_theta)
+            profile_add(profile, "attention_rope_ms", timer)
+        timer = profile_start(profile)
         key_cache = self._updated_kv_cache(
             past_cache=past_key,
             new_values=key,
@@ -265,14 +272,20 @@ class DecoderOnlyTransformer:
             start_position=start_position,
             end_position=end_position,
         )
+        profile_add(profile, "attention_kv_cache_ms", timer)
         key = key_cache[:, :end_position, :]
         value = value_cache[:, :end_position, :]
+        timer = profile_start(profile)
         key = repeat_key_value_heads(key, self.config.key_value_group_size)
         value = repeat_key_value_heads(value, self.config.key_value_group_size)
+        profile_add(profile, "attention_gqa_ms", timer)
 
+        timer = profile_start(profile)
         scores = query @ np.swapaxes(key, -1, -2)
         if self.config.scale_attention_scores:
             scores = scores / np.sqrt(self.config.head_dim)
+        profile_add(profile, "attention_qk_matmul_ms", timer)
+        timer = profile_start(profile)
         mask = self._attention_mask(
             query_length=hidden_states.shape[0],
             key_length=key.shape[1],
@@ -281,14 +294,21 @@ class DecoderOnlyTransformer:
         )
         if mask is not None:
             scores = np.where(mask[None, :, :], scores, -1.0e9)
+        profile_add(profile, "attention_mask_ms", timer)
+        timer = profile_start(profile)
         probabilities = softmax(scores, axis=-1)
+        profile_add(profile, "attention_softmax_ms", timer)
+        timer = profile_start(profile)
         context = probabilities @ value
+        profile_add(profile, "attention_av_matmul_ms", timer)
+        timer = profile_start(profile)
         merged_context = merge_heads(context)
         output = linear_t(
             merged_context,
             attention_weights.out_proj_weight_t,
             attention_weights.out_proj_bias,
         )
+        profile_add(profile, "attention_output_proj_ms", timer)
         return output, key_cache, value_cache
 
     def _updated_kv_cache(
@@ -347,16 +367,38 @@ class DecoderOnlyTransformer:
             mask = mask & (key_positions > query_positions - self.config.window_size)
         return mask
 
-    def _mlp(self, weights: MlpWeights, hidden_states: Any) -> Any:
+    def _mlp(
+        self,
+        weights: MlpWeights,
+        hidden_states: Any,
+        profile: dict[str, float] | None = None,
+    ) -> Any:
         if self.config.activation == "swiglu":
             if weights.gate_weight_t is None:
                 raise ValueError("SwiGLU MLP requires gate projection weights.")
-            gate = silu(linear_t(hidden_states, weights.gate_weight_t, weights.gate_bias))
+            timer = profile_start(profile)
+            gate = linear_t(hidden_states, weights.gate_weight_t, weights.gate_bias)
+            profile_add(profile, "mlp_gate_proj_ms", timer)
+            timer = profile_start(profile)
+            gate = silu(gate)
+            profile_add(profile, "mlp_activation_ms", timer)
+            timer = profile_start(profile)
             up = linear_t(hidden_states, weights.fc_weight_t, weights.fc_bias)
-            return linear_t(gate * up, weights.proj_weight_t, weights.proj_bias)
+            profile_add(profile, "mlp_up_proj_ms", timer)
+            timer = profile_start(profile)
+            output = linear_t(gate * up, weights.proj_weight_t, weights.proj_bias)
+            profile_add(profile, "mlp_down_proj_ms", timer)
+            return output
+        timer = profile_start(profile)
         hidden_states = linear_t(hidden_states, weights.fc_weight_t, weights.fc_bias)
+        profile_add(profile, "mlp_up_proj_ms", timer)
+        timer = profile_start(profile)
         hidden_states = self._activate(hidden_states)
-        return linear_t(hidden_states, weights.proj_weight_t, weights.proj_bias)
+        profile_add(profile, "mlp_activation_ms", timer)
+        timer = profile_start(profile)
+        output = linear_t(hidden_states, weights.proj_weight_t, weights.proj_bias)
+        profile_add(profile, "mlp_down_proj_ms", timer)
+        return output
 
     def _activate(self, hidden_states: Any) -> Any:
         if self.config.activation == "gelu_new":
