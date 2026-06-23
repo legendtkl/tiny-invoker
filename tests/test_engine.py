@@ -11,6 +11,10 @@ from tiny_invoker.tokenizer import CharTokenizer
 class CountingCache:
     token_ids: list[int]
 
+    @property
+    def length(self) -> int:
+        return len(self.token_ids)
+
 
 class CountingModel:
     def __init__(self) -> None:

@@ -17,6 +17,10 @@ class BigramKVCache:
 
     token_ids: list[int]
 
+    @property
+    def length(self) -> int:
+        return len(self.token_ids)
+
 
 @dataclass
 class BigramLanguageModel:

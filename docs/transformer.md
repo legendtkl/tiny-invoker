@@ -145,6 +145,16 @@ dimension is capacity, and only the prefix described by `cache.length` is valid.
 During decode, the new token's K/V is written into `start_position:end_position`,
 avoiding repeated copies of historical K/V on every step.
 
+`cache.length` 只保存当前位置，不保存完整 token id 历史。完整输出 token 序列由
+`engine.py` 维护；模型 cache 只维护继续推理需要的 K/V tensor 和长度。这样 decode
+每步更新 cache metadata 是 O(1)，不会随着生成长度增加反复复制 token id 列表。
+
+`cache.length` stores only the current position, not the full token-id history.
+The complete output token sequence is tracked by `engine.py`; the model cache
+keeps only the K/V tensors and the length required for continued inference.
+This makes cache metadata updates O(1) during decode instead of repeatedly
+copying token-id lists as generation grows.
+
 ## 图 4：Prefill vs Decode / Figure 4: Prefill vs Decode
 
 ```mermaid

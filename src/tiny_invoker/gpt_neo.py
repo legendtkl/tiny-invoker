@@ -86,13 +86,13 @@ class NumpyGptNeoConfig:
 
 @dataclass(frozen=True)
 class NumpyGptNeoCache:
-    token_ids: list[int]
+    token_count: int
     keys: tuple[Any, ...]
     values: tuple[Any, ...]
 
     @property
     def length(self) -> int:
-        return len(self.token_ids)
+        return self.token_count
 
     @property
     def capacity(self) -> int:
@@ -204,7 +204,11 @@ class NumpyGptNeoLanguageModel:
         )
         return ForwardOutput(
             logits=logits,
-            cache=NumpyGptNeoCache(token_ids=context_token_ids, keys=keys, values=values),
+            cache=NumpyGptNeoCache(
+                token_count=len(context_token_ids),
+                keys=keys,
+                values=values,
+            ),
         )
 
     def _forward_decode(
@@ -217,7 +221,7 @@ class NumpyGptNeoLanguageModel:
         if not isinstance(request.cache, NumpyGptNeoCache):
             raise TypeError("NumpyGptNeoLanguageModel expected NumpyGptNeoCache.")
 
-        start_position = len(request.cache.token_ids)
+        start_position = request.cache.length
         logits, keys, values = self._compute_logits(
             request.token_ids,
             start_position=start_position,
@@ -228,7 +232,7 @@ class NumpyGptNeoLanguageModel:
         return ForwardOutput(
             logits=logits,
             cache=NumpyGptNeoCache(
-                token_ids=request.cache.token_ids + request.token_ids,
+                token_count=request.cache.length + len(request.token_ids),
                 keys=keys,
                 values=values,
             ),

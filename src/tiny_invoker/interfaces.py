@@ -10,6 +10,11 @@ from tiny_invoker.tokenizer import TextTokenizer
 class KVCache(Protocol):
     """Model-specific state reused between decode steps."""
 
+    @property
+    def length(self) -> int:
+        """Number of tokens represented by the cache."""
+        ...
+
 
 class ForwardMode(str, Enum):
     PREFILL = "prefill"

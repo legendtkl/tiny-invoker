@@ -95,13 +95,13 @@ class NumpyQwen2Config:
 
 @dataclass(frozen=True)
 class NumpyQwen2Cache:
-    token_ids: list[int]
+    token_count: int
     keys: tuple[Any, ...]
     values: tuple[Any, ...]
 
     @property
     def length(self) -> int:
-        return len(self.token_ids)
+        return self.token_count
 
     @property
     def capacity(self) -> int:
@@ -227,7 +227,11 @@ class NumpyQwen2LanguageModel:
         )
         return ForwardOutput(
             logits=logits,
-            cache=NumpyQwen2Cache(token_ids=context_token_ids, keys=keys, values=values),
+            cache=NumpyQwen2Cache(
+                token_count=len(context_token_ids),
+                keys=keys,
+                values=values,
+            ),
         )
 
     def _forward_decode(
@@ -240,7 +244,7 @@ class NumpyQwen2LanguageModel:
         if not isinstance(request.cache, NumpyQwen2Cache):
             raise TypeError("NumpyQwen2LanguageModel expected NumpyQwen2Cache.")
 
-        start_position = len(request.cache.token_ids)
+        start_position = request.cache.length
         logits, keys, values = self._compute_logits(
             request.token_ids,
             start_position=start_position,
@@ -251,7 +255,7 @@ class NumpyQwen2LanguageModel:
         return ForwardOutput(
             logits=logits,
             cache=NumpyQwen2Cache(
-                token_ids=request.cache.token_ids + request.token_ids,
+                token_count=request.cache.length + len(request.token_ids),
                 keys=keys,
                 values=values,
             ),
