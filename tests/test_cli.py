@@ -1,6 +1,7 @@
 import unittest
 
 from tiny_invoker.cli import (
+    benchmark_metric_stats,
     build_bench_gpt_neo_parser,
     build_compare_gpt_neo_parser,
     build_compare_qwen2_parser,
@@ -23,13 +24,26 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.repeats, 2)
         self.assertEqual(args.warmups, 1)
         self.assertFalse(args.profile)
+        self.assertFalse(args.json)
 
-    def test_bench_gpt_neo_parser_accepts_profile(self) -> None:
+    def test_bench_gpt_neo_parser_accepts_profile_and_json(self) -> None:
         parser = build_bench_gpt_neo_parser()
 
-        args = parser.parse_args(["roneneldan/TinyStories-33M", "Once upon a time", "--profile"])
+        args = parser.parse_args(
+            ["roneneldan/TinyStories-33M", "Once upon a time", "--profile", "--json"]
+        )
 
         self.assertTrue(args.profile)
+        self.assertTrue(args.json)
+
+    def test_benchmark_metric_stats(self) -> None:
+        stats = benchmark_metric_stats(
+            "prefill_ms",
+            [{"prefill_ms": 1.0}, {"prefill_ms": 3.0}],
+        )
+
+        self.assertEqual(stats["avg"], 2.0)
+        self.assertAlmostEqual(stats["stdev"], 2**0.5)
 
     def test_compare_gpt_neo_parser_defaults(self) -> None:
         parser = build_compare_gpt_neo_parser()

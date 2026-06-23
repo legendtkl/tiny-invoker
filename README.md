@@ -107,12 +107,24 @@ PYTHONPATH=src python3 -m tiny_invoker generate-gpt-neo roneneldan/TinyStories-3
 Benchmark the NumPy GPT-Neo runtime:
 
 ```bash
-PYTHONPATH=src python3 -m tiny_invoker bench-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --max-new-tokens 128 --temperature 0 --top-k 20 --profile
+PYTHONPATH=src python3 -m tiny_invoker bench-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --max-new-tokens 128 --temperature 0 --top-k 20 --profile --json
 ```
+
+This is the baseline command for optimization work. It prints:
+
+- `prefill_ms` and `prefill_tokens_per_second`: prompt processing cost.
+- `ttft_ms`: approximate time to first generated token.
+- `tpot_ms` and `decode_tokens_per_second`: per-token decode cost after the
+  first generated token.
+- `model_decode_tokens_per_second`: decode forward-only throughput, excluding
+  sampler time.
+- `end_to_end_ms` and `end_to_end_tokens_per_second`: full engine wall-clock
+  generation cost.
 
 With `--profile`, the benchmark also prints internal prefill and per-token
 decode timing for embedding, Transformer blocks, attention, MLP, final norm,
-and LM head.
+and LM head. With `--json`, it prints a final machine-readable JSON line so
+baseline and optimized runs can be compared later.
 
 Compare NumPy GPT-Neo logits with Hugging Face Transformers:
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import random
 from pathlib import Path
 from statistics import mean, stdev
 import sys
 import time
+from typing import Any
 
 from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig, InferenceEngine
@@ -33,6 +35,27 @@ PROFILE_METRIC_NAMES = (
     "final_norm_ms",
     "lm_head_ms",
 )
+
+SEGMENTED_BENCHMARK_METRIC_NAMES = (
+    "prefill_ms",
+    "prefill_tokens_per_second",
+    "ttft_ms",
+    "decode_forward_ms",
+    "decode_forward_total_ms",
+    "sampler_with_mask_ms",
+    "sampler_total_ms",
+    "tpot_ms",
+    "decode_tokens_per_second",
+    "model_decode_tokens_per_second",
+)
+
+END_TO_END_BENCHMARK_METRIC_NAMES = (
+    "end_to_end_ms",
+    "end_to_end_tokens_per_second",
+)
+
+BenchmarkValue = float | int | str
+BenchmarkRow = dict[str, BenchmarkValue]
 
 
 def build_generate_parser() -> argparse.ArgumentParser:
@@ -207,6 +230,7 @@ def build_bench_gpt_neo_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--sample-chars", type=int, default=500)
     parser.add_argument("--profile", action="store_true", help="Print internal prefill/decode forward timing.")
+    parser.add_argument("--json", action="store_true", help="Print a machine-readable JSON summary after text output.")
     return parser
 
 
@@ -721,19 +745,28 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
     print(f"warmups: {args.warmups}")
     print(f"profile: {args.profile}")
     print(f"model_load_ms_excluded: {load_ms:.2f}")
-    print_benchmark_metric("prefill_ms", segmented_rows)
-    print_benchmark_metric("decode_forward_ms", segmented_rows)
-    print_benchmark_metric("sampler_with_mask_ms", segmented_rows)
+    for metric_name in SEGMENTED_BENCHMARK_METRIC_NAMES:
+        print_benchmark_metric(metric_name, segmented_rows)
     if args.profile:
         for metric_name in PROFILE_METRIC_NAMES:
             print_benchmark_metric(f"profile_prefill_{metric_name}", segmented_rows)
         for metric_name in PROFILE_METRIC_NAMES:
             print_benchmark_metric(f"profile_decode_{metric_name}", segmented_rows)
-    print_benchmark_metric("end_to_end_ms", end_to_end_rows)
-    print_benchmark_metric("end_to_end_tokens_per_second", end_to_end_rows)
+    for metric_name in END_TO_END_BENCHMARK_METRIC_NAMES:
+        print_benchmark_metric(metric_name, end_to_end_rows)
     if args.sample_chars > 0 and end_to_end_rows:
         print("sample_output_prefix:")
         print(end_to_end_rows[0]["text"][: args.sample_chars])
+    if args.json:
+        payload = build_benchmark_json_payload(
+            args=args,
+            top_k=top_k,
+            prompt_token_count=len(prompt_token_ids),
+            load_ms=load_ms,
+            segmented_rows=segmented_rows,
+            end_to_end_rows=end_to_end_rows,
+        )
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
 
@@ -968,7 +1001,7 @@ def run_segmented_gpt_neo_benchmark(
     top_k: int | None,
     seed: int | None,
     profile: bool = False,
-) -> dict[str, float | str]:
+) -> BenchmarkRow:
     rng = random.Random(seed)
     prefill_start = time.perf_counter()
     output, prefill_profile = run_profiled_forward(
@@ -1016,10 +1049,43 @@ def run_segmented_gpt_neo_benchmark(
             logits = output.logits
             cache = output.cache
 
-    row: dict[str, float | str] = {
+    sampler_total_ms = sum(sampler_ms)
+    decode_forward_total_ms = sum(decode_ms)
+    subsequent_token_ms = [
+        decode_ms[index] + sampler_ms[index + 1]
+        for index in range(min(len(decode_ms), max(0, len(sampler_ms) - 1)))
+    ]
+    subsequent_token_total_ms = sum(subsequent_token_ms)
+    prefill_tokens_per_second = (
+        len(prompt_token_ids) / (prefill_ms / 1000.0) if prefill_ms > 0 else 0.0
+    )
+    ttft_ms = prefill_ms + sampler_ms[0] if sampler_ms else 0.0
+    tpot_ms = mean(subsequent_token_ms) if subsequent_token_ms else 0.0
+    decode_tokens_per_second = (
+        len(subsequent_token_ms) / (subsequent_token_total_ms / 1000.0)
+        if subsequent_token_total_ms > 0
+        else 0.0
+    )
+    model_decode_tokens_per_second = (
+        len(decode_ms) / (decode_forward_total_ms / 1000.0)
+        if decode_forward_total_ms > 0
+        else 0.0
+    )
+
+    row: BenchmarkRow = {
+        "prompt_tokens": len(prompt_token_ids),
+        "generated_tokens": max_new_tokens,
+        "decode_steps": len(decode_ms),
         "prefill_ms": prefill_ms,
+        "prefill_tokens_per_second": prefill_tokens_per_second,
+        "ttft_ms": ttft_ms,
         "decode_forward_ms": mean(decode_ms) if decode_ms else 0.0,
+        "decode_forward_total_ms": decode_forward_total_ms,
         "sampler_with_mask_ms": mean(sampler_ms) if sampler_ms else 0.0,
+        "sampler_total_ms": sampler_total_ms,
+        "tpot_ms": tpot_ms,
+        "decode_tokens_per_second": decode_tokens_per_second,
+        "model_decode_tokens_per_second": model_decode_tokens_per_second,
         "text": tokenizer.decode(generated_token_ids),
     }
     if profile:
@@ -1047,7 +1113,7 @@ def run_end_to_end_gpt_neo_benchmark(
     temperature: float,
     top_k: int | None,
     seed: int | None,
-) -> dict[str, float | str]:
+) -> BenchmarkRow:
     start = time.perf_counter()
     result = engine.generate(
         prompt,
@@ -1068,12 +1134,60 @@ def run_end_to_end_gpt_neo_benchmark(
     }
 
 
-def print_benchmark_metric(name: str, rows: list[dict[str, float | str]]) -> None:
+def benchmark_metric_stats(name: str, rows: list[BenchmarkRow]) -> dict[str, float]:
     values = [float(row[name]) for row in rows]
     value_mean = mean(values) if values else 0.0
     value_stdev = stdev(values) if len(values) > 1 else 0.0
-    print(f"{name}_avg: {value_mean:.4f}")
-    print(f"{name}_stdev: {value_stdev:.4f}")
+    return {
+        "avg": value_mean,
+        "stdev": value_stdev,
+    }
+
+
+def print_benchmark_metric(name: str, rows: list[BenchmarkRow]) -> None:
+    stats = benchmark_metric_stats(name, rows)
+    print(f"{name}_avg: {stats['avg']:.4f}")
+    print(f"{name}_stdev: {stats['stdev']:.4f}")
+
+
+def build_benchmark_json_payload(
+    args: argparse.Namespace,
+    top_k: int | None,
+    prompt_token_count: int,
+    load_ms: float,
+    segmented_rows: list[BenchmarkRow],
+    end_to_end_rows: list[BenchmarkRow],
+) -> dict[str, object]:
+    metric_names = list(SEGMENTED_BENCHMARK_METRIC_NAMES) + list(
+        END_TO_END_BENCHMARK_METRIC_NAMES
+    )
+    if args.profile:
+        metric_names.extend(f"profile_prefill_{name}" for name in PROFILE_METRIC_NAMES)
+        metric_names.extend(f"profile_decode_{name}" for name in PROFILE_METRIC_NAMES)
+
+    metrics: dict[str, dict[str, float]] = {}
+    for metric_name in metric_names:
+        rows = (
+            end_to_end_rows
+            if metric_name in END_TO_END_BENCHMARK_METRIC_NAMES
+            else segmented_rows
+        )
+        metrics[metric_name] = benchmark_metric_stats(metric_name, rows)
+
+    return {
+        "benchmark_name": "gpt_neo_runtime",
+        "model_id": args.model_id,
+        "prompt": args.prompt,
+        "prompt_tokens": prompt_token_count,
+        "max_new_tokens": args.max_new_tokens,
+        "temperature": args.temperature,
+        "top_k": top_k,
+        "repeats": args.repeats,
+        "warmups": args.warmups,
+        "profile": args.profile,
+        "model_load_ms_excluded": load_ms,
+        "metrics": metrics,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
