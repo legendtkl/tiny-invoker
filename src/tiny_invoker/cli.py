@@ -371,6 +371,17 @@ def build_compare_bench_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline-label", default="baseline")
     parser.add_argument("--candidate-label", default="candidate")
     parser.add_argument(
+        "--stat",
+        choices=("avg", "p50", "p95", "stdev"),
+        default="avg",
+        help="Metric statistic to compare.",
+    )
+    parser.add_argument(
+        "--all-records",
+        action="store_true",
+        help="Compare matching benchmark cases across the whole JSONL file.",
+    )
+    parser.add_argument(
         "--metrics",
         default=",".join(DEFAULT_COMPARE_METRIC_NAMES),
         help="Comma-separated metric names to compare, or 'all'.",
@@ -1025,39 +1036,72 @@ def run_compare_bench(argv: list[str]) -> int:
     if not candidate_records:
         raise SystemExit(f"No benchmark JSON records found in {args.candidate}.")
 
-    baseline = baseline_records[-1]
-    candidate = candidate_records[-1]
-    baseline_metrics = benchmark_payload_metrics(baseline)
-    candidate_metrics = benchmark_payload_metrics(candidate)
-    common_metrics = set(baseline_metrics) & set(candidate_metrics)
-    if args.metrics == "all":
-        metric_names = sorted(common_metrics)
-    else:
-        metric_names = [name.strip() for name in args.metrics.split(",") if name.strip()]
-
     print("comparison_name: benchmark_delta")
+    print(f"comparison_mode: {'all_records' if args.all_records else 'last_record'}")
+    print(f"stat: {args.stat}")
     print(f"baseline_file: {args.baseline}")
     print(f"candidate_file: {args.candidate}")
     print(f"baseline_label: {args.baseline_label}")
     print(f"candidate_label: {args.candidate_label}")
+    if args.all_records:
+        return print_all_benchmark_record_comparison(
+            baseline_records=baseline_records,
+            candidate_records=candidate_records,
+            metric_selector=args.metrics,
+            stat_name=args.stat,
+        )
+    return print_single_benchmark_record_comparison(
+        baseline=baseline_records[-1],
+        candidate=candidate_records[-1],
+        metric_selector=args.metrics,
+        stat_name=args.stat,
+    )
+
+
+def print_single_benchmark_record_comparison(
+    baseline: dict[str, object],
+    candidate: dict[str, object],
+    metric_selector: str,
+    stat_name: str,
+) -> int:
+    baseline_metrics = benchmark_payload_metrics(baseline, stat_name=stat_name)
+    candidate_metrics = benchmark_payload_metrics(candidate, stat_name=stat_name)
+    common_metrics = set(baseline_metrics) & set(candidate_metrics)
+    metric_names = selected_benchmark_metric_names(metric_selector, common_metrics)
+
     print(f"baseline_benchmark_name: {baseline.get('benchmark_name')}")
     print(f"candidate_benchmark_name: {candidate.get('benchmark_name')}")
-    print("metric baseline_avg candidate_avg delta_abs delta_pct")
+    print(f"metric baseline_{stat_name} candidate_{stat_name} delta_abs delta_pct")
     for metric_name in metric_names:
-        if metric_name not in common_metrics:
-            print(f"{metric_name} missing missing missing missing")
-            continue
-        baseline_value = baseline_metrics[metric_name]
-        candidate_value = candidate_metrics[metric_name]
-        delta_abs = candidate_value - baseline_value
-        delta_pct = percentage_delta(baseline_value, candidate_value)
-        print(
-            f"{metric_name} "
-            f"{baseline_value:.6f} "
-            f"{candidate_value:.6f} "
-            f"{delta_abs:.6f} "
-            f"{format_percentage(delta_pct)}"
-        )
+        print_benchmark_delta(metric_name, baseline_metrics, candidate_metrics)
+    return 0
+
+
+def print_all_benchmark_record_comparison(
+    baseline_records: list[dict[str, object]],
+    candidate_records: list[dict[str, object]],
+    metric_selector: str,
+    stat_name: str,
+) -> int:
+    baseline_by_key = benchmark_record_lookup(baseline_records)
+    candidate_by_key = benchmark_record_lookup(candidate_records)
+    common_keys = sorted(
+        set(baseline_by_key) & set(candidate_by_key),
+        key=benchmark_record_key_label,
+    )
+    if not common_keys:
+        raise SystemExit("No matching benchmark cases found.")
+
+    print(f"matched_cases: {len(common_keys)}")
+    print(f"case metric baseline_{stat_name} candidate_{stat_name} delta_abs delta_pct")
+    for key in common_keys:
+        baseline_metrics = benchmark_payload_metrics(baseline_by_key[key], stat_name=stat_name)
+        candidate_metrics = benchmark_payload_metrics(candidate_by_key[key], stat_name=stat_name)
+        common_metrics = set(baseline_metrics) & set(candidate_metrics)
+        metric_names = selected_benchmark_metric_names(metric_selector, common_metrics)
+        case_label = benchmark_record_key_label(key)
+        for metric_name in metric_names:
+            print_benchmark_delta(metric_name, baseline_metrics, candidate_metrics, case_label)
     return 0
 
 
@@ -1304,7 +1348,10 @@ def load_benchmark_jsonl(path: Path) -> list[dict[str, object]]:
     return records
 
 
-def benchmark_payload_metrics(payload: dict[str, object]) -> dict[str, float]:
+def benchmark_payload_metrics(
+    payload: dict[str, object],
+    stat_name: str = "avg",
+) -> dict[str, float]:
     metrics = payload.get("metrics")
     if not isinstance(metrics, dict):
         return {}
@@ -1312,10 +1359,78 @@ def benchmark_payload_metrics(payload: dict[str, object]) -> dict[str, float]:
     for metric_name, metric_payload in metrics.items():
         if not isinstance(metric_name, str) or not isinstance(metric_payload, dict):
             continue
-        avg = metric_payload.get("avg")
-        if isinstance(avg, int | float):
-            values[metric_name] = float(avg)
+        stat_value = metric_payload.get(stat_name)
+        if isinstance(stat_value, int | float):
+            values[metric_name] = float(stat_value)
     return values
+
+
+def selected_benchmark_metric_names(
+    metric_selector: str,
+    common_metrics: set[str],
+) -> list[str]:
+    if metric_selector == "all":
+        return sorted(common_metrics)
+    return [name.strip() for name in metric_selector.split(",") if name.strip()]
+
+
+def print_benchmark_delta(
+    metric_name: str,
+    baseline_metrics: dict[str, float],
+    candidate_metrics: dict[str, float],
+    case_label: str | None = None,
+) -> None:
+    prefix = f"{case_label} " if case_label is not None else ""
+    if metric_name not in baseline_metrics or metric_name not in candidate_metrics:
+        print(f"{prefix}{metric_name} missing missing missing missing")
+        return
+    baseline_value = baseline_metrics[metric_name]
+    candidate_value = candidate_metrics[metric_name]
+    delta_abs = candidate_value - baseline_value
+    delta_pct = percentage_delta(baseline_value, candidate_value)
+    print(
+        f"{prefix}{metric_name} "
+        f"{baseline_value:.6f} "
+        f"{candidate_value:.6f} "
+        f"{delta_abs:.6f} "
+        f"{format_percentage(delta_pct)}"
+    )
+
+
+BenchmarkRecordKey = tuple[object, ...]
+
+
+def benchmark_record_lookup(
+    records: list[dict[str, object]],
+) -> dict[BenchmarkRecordKey, dict[str, object]]:
+    by_key: dict[BenchmarkRecordKey, dict[str, object]] = {}
+    for record in records:
+        by_key[benchmark_record_key(record)] = record
+    return by_key
+
+
+def benchmark_record_key(record: dict[str, object]) -> BenchmarkRecordKey:
+    return (
+        record.get("benchmark_name"),
+        record.get("model_id"),
+        record.get("prompt"),
+        record.get("prompt_tokens"),
+        record.get("max_new_tokens"),
+        record.get("temperature"),
+        record.get("top_k"),
+    )
+
+
+def benchmark_record_key_label(key: BenchmarkRecordKey) -> str:
+    benchmark_name, model_id, prompt, prompt_tokens, max_new_tokens, temperature, top_k = key
+    prompt_text = str(prompt).replace("\n", "\\n")
+    if len(prompt_text) > 48:
+        prompt_text = f"{prompt_text[:45]}..."
+    return (
+        f"benchmark={benchmark_name}|model={model_id}|prompt={prompt_text!r}|"
+        f"prompt_tokens={prompt_tokens}|max_new_tokens={max_new_tokens}|"
+        f"temperature={temperature}|top_k={top_k}"
+    )
 
 
 def build_server_benchmark_json_payload(
@@ -1543,19 +1658,15 @@ def run_end_to_end_language_model_benchmark(
 
 
 def benchmark_metric_stats(name: str, rows: list[BenchmarkRow]) -> dict[str, float]:
-    values = [float(row[name]) for row in rows]
-    value_mean = mean(values) if values else 0.0
-    value_stdev = stdev(values) if len(values) > 1 else 0.0
-    return {
-        "avg": value_mean,
-        "stdev": value_stdev,
-    }
+    return distribution_stats(float(row[name]) for row in rows)
 
 
 def print_benchmark_metric(name: str, rows: list[BenchmarkRow]) -> None:
     stats = benchmark_metric_stats(name, rows)
     print(f"{name}_avg: {stats['avg']:.4f}")
     print(f"{name}_stdev: {stats['stdev']:.4f}")
+    print(f"{name}_p50: {stats['p50']:.4f}")
+    print(f"{name}_p95: {stats['p95']:.4f}")
 
 
 def build_benchmark_json_payload(

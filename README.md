@@ -125,12 +125,15 @@ With `--profile`, the benchmark also prints internal prefill and per-token
 decode timing for embedding, Transformer blocks, attention internals, MLP
 internals, final norm, and LM head. With `--json`, it prints a final
 machine-readable JSON line. With `--json-output`, it appends the same payload to
-a JSONL file so baseline and optimized runs can be compared later.
+a JSONL file so baseline and optimized runs can be compared later. Each metric
+records `avg`, `stdev`, `p50`, and `p95`; prefer multiple `--repeats` when
+studying optimization effects on macOS CPU.
 
 Compare two benchmark JSONL files:
 
 ```bash
 PYTHONPATH=src python3 -m tiny_invoker compare-bench benchmarks/baseline/qwen2.jsonl benchmarks/optimized/qwen2.jsonl
+PYTHONPATH=src python3 -m tiny_invoker compare-bench benchmarks/baseline/qwen2.jsonl benchmarks/optimized/qwen2.jsonl --all-records --stat p50
 ```
 
 Compare NumPy GPT-Neo logits with Hugging Face Transformers:
