@@ -107,7 +107,7 @@ PYTHONPATH=src python3 -m tiny_invoker generate-gpt-neo roneneldan/TinyStories-3
 Benchmark the NumPy GPT-Neo runtime:
 
 ```bash
-PYTHONPATH=src python3 -m tiny_invoker bench-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --max-new-tokens 128 --temperature 0 --top-k 20 --profile --json
+PYTHONPATH=src python3 -m tiny_invoker bench-gpt-neo roneneldan/TinyStories-33M "Once upon a time" --max-new-tokens 128 --temperature 0 --top-k 20 --profile --json --json-output benchmarks/baseline/gpt-neo.jsonl
 ```
 
 This is the baseline command for optimization work. It prints:
@@ -122,9 +122,16 @@ This is the baseline command for optimization work. It prints:
   generation cost.
 
 With `--profile`, the benchmark also prints internal prefill and per-token
-decode timing for embedding, Transformer blocks, attention, MLP, final norm,
-and LM head. With `--json`, it prints a final machine-readable JSON line so
-baseline and optimized runs can be compared later.
+decode timing for embedding, Transformer blocks, attention internals, MLP
+internals, final norm, and LM head. With `--json`, it prints a final
+machine-readable JSON line. With `--json-output`, it appends the same payload to
+a JSONL file so baseline and optimized runs can be compared later.
+
+Compare two benchmark JSONL files:
+
+```bash
+PYTHONPATH=src python3 -m tiny_invoker compare-bench benchmarks/baseline/qwen2.jsonl benchmarks/optimized/qwen2.jsonl
+```
 
 Compare NumPy GPT-Neo logits with Hugging Face Transformers:
 
@@ -143,7 +150,7 @@ safetensors weights:
 ```bash
 PYTHONPATH=src python3 -m tiny_invoker probe-qwen2 Qwen/Qwen2.5-0.5B "Hello"
 PYTHONPATH=src python3 -m tiny_invoker generate-qwen2 Qwen/Qwen2.5-0.5B "Hello" --max-new-tokens 8 --temperature 0
-PYTHONPATH=src python3 -m tiny_invoker bench-qwen2 Qwen/Qwen2.5-0.5B "Hello" --max-new-tokens 8 --temperature 0 --profile --json
+PYTHONPATH=src python3 -m tiny_invoker bench-qwen2 Qwen/Qwen2.5-0.5B "Hello" --max-new-tokens 8 --temperature 0 --profile --json --json-output benchmarks/baseline/qwen2.jsonl
 PYTHONPATH=src python3 -m tiny_invoker compare-qwen2 Qwen/Qwen2.5-0.5B "Hello" --top-k 10
 ```
 
@@ -159,6 +166,17 @@ curl -X POST http://127.0.0.1:8000/generate \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"Once upon a time","max_new_tokens":8,"temperature":0,"top_k":20}'
 ```
+
+Benchmark a running server from the client side:
+
+```bash
+PYTHONPATH=src python3 -m tiny_invoker bench-server --url http://127.0.0.1:8000/generate --prompt "Once upon a time" --max-new-tokens 8 --requests 8 --concurrency 2 --json --json-output benchmarks/baseline/server.jsonl
+```
+
+The current server response is not streaming, so `bench-server` reports full
+request latency, time to first byte, non-streaming token time, request
+throughput, and generated-token throughput. True TTFT/ITL serving metrics will
+become meaningful after a streaming endpoint is added.
 
 The GPT-Neo runtime now uses a small decoder-only Transformer backbone. GPT-Neo
 specific code maps Hugging Face config and weight names into that backbone, while

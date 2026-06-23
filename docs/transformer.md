@@ -264,3 +264,43 @@ That part is handled by `src/tiny_invoker/engine.py` and
   Converts scores to probabilities.
 - `layer_norm()`：稳定 hidden state 的数值范围。  
   Stabilizes hidden-state values.
+
+## Profile 指标对应关系 / Profile Metric Map
+
+`bench-gpt-neo` 和 `bench-qwen2` 加上 `--profile` 后，会分别打印
+`profile_prefill_*` 和 `profile_decode_*` 指标。前缀表示阶段，后缀表示
+`transformer.py` 内部的计算步骤。
+
+With `--profile`, `bench-gpt-neo` and `bench-qwen2` print
+`profile_prefill_*` and `profile_decode_*` metrics. The prefix is the phase,
+and the suffix is the computation step inside `transformer.py`.
+
+| 指标后缀 / Metric suffix | 对应计算 / Computation |
+| --- | --- |
+| `embedding_ms` | token embedding 和 position embedding / token and position embedding |
+| `blocks_ms` | 所有 Transformer blocks 总时间 / all Transformer blocks |
+| `attention_ms` | 每层 self-attention 总时间 / total self-attention |
+| `attention_qkv_proj_ms` | hidden states 乘 Q/K/V 投影矩阵 / Q/K/V projections |
+| `attention_rope_ms` | RoPE 旋转位置编码 / rotary position embedding |
+| `attention_kv_cache_ms` | 写入或复用 K/V cache buffer / K/V cache update |
+| `attention_gqa_ms` | grouped-query attention 的 K/V head repeat / GQA head expansion |
+| `attention_qk_matmul_ms` | `Q x K^T` 注意力分数 / attention score matmul |
+| `attention_mask_ms` | causal/local mask 和分数屏蔽 / attention mask application |
+| `attention_softmax_ms` | 分数转概率 / score-to-probability softmax |
+| `attention_av_matmul_ms` | `probabilities x V` 取上下文 / weighted value matmul |
+| `attention_output_proj_ms` | attention 输出投影 / attention output projection |
+| `mlp_ms` | 每层 MLP 总时间 / total MLP |
+| `mlp_gate_proj_ms` | SwiGLU gate 投影 / SwiGLU gate projection |
+| `mlp_up_proj_ms` | MLP up/first projection / MLP up or first projection |
+| `mlp_activation_ms` | GELU 或 SiLU 激活 / activation function |
+| `mlp_down_proj_ms` | MLP down/output projection / MLP output projection |
+| `final_norm_ms` | 最后一层 norm / final normalization |
+| `lm_head_ms` | 最后 token hidden state 乘词表矩阵 / vocabulary projection |
+
+这些指标是学习和定位瓶颈用的，不等价于生产框架里的 kernel profiler。
+例如 NumPy 版本的 `attention_qk_matmul_ms` 代表 Python/NumPy 路径下的矩阵乘，
+不是 CUDA FlashAttention kernel 时间。
+
+These metrics are for learning and bottleneck diagnosis. They are not the same
+as a production kernel profiler. For example, `attention_qk_matmul_ms` measures
+the Python/NumPy path here, not a CUDA FlashAttention kernel.
