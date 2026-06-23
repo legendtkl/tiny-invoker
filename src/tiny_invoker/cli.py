@@ -55,6 +55,16 @@ END_TO_END_BENCHMARK_METRIC_NAMES = (
     "end_to_end_tokens_per_second",
 )
 
+DEFAULT_COMPARE_METRIC_NAMES = (
+    "ttft_ms",
+    "tpot_ms",
+    "prefill_tokens_per_second",
+    "decode_tokens_per_second",
+    "model_decode_tokens_per_second",
+    "end_to_end_tokens_per_second",
+    "end_to_end_ms",
+)
+
 BenchmarkValue = float | int | str
 BenchmarkRow = dict[str, BenchmarkValue]
 ModelLoader = Callable[[argparse.Namespace], tuple[Any, HfTokenizer, dict[str, Path]]]
@@ -221,6 +231,7 @@ def add_benchmark_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sample-chars", type=int, default=500)
     parser.add_argument("--profile", action="store_true", help="Print internal prefill/decode forward timing.")
     parser.add_argument("--json", action="store_true", help="Print a machine-readable JSON summary after text output.")
+    parser.add_argument("--json-output", type=Path, default=None, help="Append the JSON summary to a JSONL file.")
 
 
 def build_bench_gpt_neo_parser() -> argparse.ArgumentParser:
@@ -331,6 +342,23 @@ def build_compare_qwen2_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--tolerance", type=float, default=1.0e-3)
     parser.add_argument("--fail-on-mismatch", action="store_true")
+    return parser
+
+
+def build_compare_bench_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker compare-bench",
+        description="Compare two benchmark JSONL files.",
+    )
+    parser.add_argument("baseline", type=Path, help="Baseline benchmark JSONL file.")
+    parser.add_argument("candidate", type=Path, help="Candidate benchmark JSONL file.")
+    parser.add_argument("--baseline-label", default="baseline")
+    parser.add_argument("--candidate-label", default="candidate")
+    parser.add_argument(
+        "--metrics",
+        default=",".join(DEFAULT_COMPARE_METRIC_NAMES),
+        help="Comma-separated metric names to compare, or 'all'.",
+    )
     return parser
 
 
@@ -802,17 +830,20 @@ def run_language_model_benchmark(
     if args.sample_chars > 0 and end_to_end_rows:
         print("sample_output_prefix:")
         print(end_to_end_rows[0]["text"][: args.sample_chars])
+    payload = build_benchmark_json_payload(
+        args=args,
+        benchmark_name=benchmark_name,
+        top_k=top_k,
+        prompt_token_count=len(prompt_token_ids),
+        load_ms=load_ms,
+        segmented_rows=segmented_rows,
+        end_to_end_rows=end_to_end_rows,
+    )
     if args.json:
-        payload = build_benchmark_json_payload(
-            args=args,
-            benchmark_name=benchmark_name,
-            top_k=top_k,
-            prompt_token_count=len(prompt_token_ids),
-            load_ms=load_ms,
-            segmented_rows=segmented_rows,
-            end_to_end_rows=end_to_end_rows,
-        )
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    if args.json_output is not None:
+        append_jsonl(args.json_output, payload)
+        print(f"json_output_file: {args.json_output}")
     return 0
 
 
@@ -948,6 +979,53 @@ def run_compare_qwen2(argv: list[str]) -> int:
     return 0
 
 
+def run_compare_bench(argv: list[str]) -> int:
+    parser = build_compare_bench_parser()
+    args = parser.parse_args(argv)
+
+    baseline_records = load_benchmark_jsonl(args.baseline)
+    candidate_records = load_benchmark_jsonl(args.candidate)
+    if not baseline_records:
+        raise SystemExit(f"No benchmark JSON records found in {args.baseline}.")
+    if not candidate_records:
+        raise SystemExit(f"No benchmark JSON records found in {args.candidate}.")
+
+    baseline = baseline_records[-1]
+    candidate = candidate_records[-1]
+    baseline_metrics = benchmark_payload_metrics(baseline)
+    candidate_metrics = benchmark_payload_metrics(candidate)
+    common_metrics = set(baseline_metrics) & set(candidate_metrics)
+    if args.metrics == "all":
+        metric_names = sorted(common_metrics)
+    else:
+        metric_names = [name.strip() for name in args.metrics.split(",") if name.strip()]
+
+    print("comparison_name: benchmark_delta")
+    print(f"baseline_file: {args.baseline}")
+    print(f"candidate_file: {args.candidate}")
+    print(f"baseline_label: {args.baseline_label}")
+    print(f"candidate_label: {args.candidate_label}")
+    print(f"baseline_benchmark_name: {baseline.get('benchmark_name')}")
+    print(f"candidate_benchmark_name: {candidate.get('benchmark_name')}")
+    print("metric baseline_avg candidate_avg delta_abs delta_pct")
+    for metric_name in metric_names:
+        if metric_name not in common_metrics:
+            print(f"{metric_name} missing missing missing missing")
+            continue
+        baseline_value = baseline_metrics[metric_name]
+        candidate_value = candidate_metrics[metric_name]
+        delta_abs = candidate_value - baseline_value
+        delta_pct = percentage_delta(baseline_value, candidate_value)
+        print(
+            f"{metric_name} "
+            f"{baseline_value:.6f} "
+            f"{candidate_value:.6f} "
+            f"{delta_abs:.6f} "
+            f"{format_percentage(delta_pct)}"
+        )
+    return 0
+
+
 def load_hf_reference_gpt_neo_logits(args: argparse.Namespace, token_ids: list[int]) -> Any:
     try:
         import torch
@@ -1036,6 +1114,52 @@ def top_token_ids(logits: Any, top_k: int) -> list[int]:
 
 def elapsed_ms(start_time: float) -> float:
     return (time.perf_counter() - start_time) * 1000.0
+
+
+def append_jsonl(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        file.write("\n")
+
+
+def load_benchmark_jsonl(path: Path) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    with path.open("r", encoding="utf-8") as file:
+        for line in file:
+            stripped = line.strip()
+            if not stripped.startswith("{"):
+                continue
+            payload = json.loads(stripped)
+            if isinstance(payload, dict) and "metrics" in payload:
+                records.append(payload)
+    return records
+
+
+def benchmark_payload_metrics(payload: dict[str, object]) -> dict[str, float]:
+    metrics = payload.get("metrics")
+    if not isinstance(metrics, dict):
+        return {}
+    values: dict[str, float] = {}
+    for metric_name, metric_payload in metrics.items():
+        if not isinstance(metric_name, str) or not isinstance(metric_payload, dict):
+            continue
+        avg = metric_payload.get("avg")
+        if isinstance(avg, int | float):
+            values[metric_name] = float(avg)
+    return values
+
+
+def percentage_delta(baseline: float, candidate: float) -> float | None:
+    if baseline == 0.0:
+        return None
+    return (candidate - baseline) / baseline * 100.0
+
+
+def format_percentage(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:+.2f}%"
 
 
 def run_segmented_language_model_benchmark(
@@ -1269,4 +1393,6 @@ def main(argv: list[str] | None = None) -> int:
         return run_compare_gpt_neo(args[1:])
     if args and args[0] == "compare-qwen2":
         return run_compare_qwen2(args[1:])
+    if args and args[0] == "compare-bench":
+        return run_compare_bench(args[1:])
     return run_generate(args)
