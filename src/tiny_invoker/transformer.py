@@ -232,6 +232,7 @@ class DecoderOnlyTransformer:
         past_value: Any | None,
         profile: dict[str, float] | None = None,
     ) -> tuple[Any, Any, Any]:
+        np = require_numpy()
         attention_weights = layer_weights.attention
         timer = profile_start(profile)
         query = split_heads(

@@ -121,6 +121,12 @@ class NumpyQwen2LanguageModelTest(unittest.TestCase):
                     mode=ForwardMode.PREFILL,
                 )
             )
+            multi_token_prefill = model.forward(
+                ForwardInput(
+                    token_ids=tokenizer.encode("ab"),
+                    mode=ForwardMode.PREFILL,
+                )
+            )
             decode = model.forward(
                 ForwardInput(
                     token_ids=tokenizer.encode("b"),
@@ -131,6 +137,7 @@ class NumpyQwen2LanguageModelTest(unittest.TestCase):
 
         self.assertEqual(prefill.logits.shape, (tokenizer.vocab_size,))
         self.assertEqual(profiled_prefill.logits.shape, (tokenizer.vocab_size,))
+        self.assertEqual(multi_token_prefill.logits.shape, (tokenizer.vocab_size,))
         self.assertIsNotNone(model.transformer._rope_cos_cache)
         self.assertEqual(model.transformer._rope_cos_cache.shape, (1, 16, 2))
         self.assertIn("attention_ms", profile)

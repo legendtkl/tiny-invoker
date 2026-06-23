@@ -304,3 +304,42 @@ and the suffix is the computation step inside `transformer.py`.
 These metrics are for learning and bottleneck diagnosis. They are not the same
 as a production kernel profiler. For example, `attention_qk_matmul_ms` measures
 the Python/NumPy path here, not a CUDA FlashAttention kernel.
+
+## 当前 P2 优化 / Current P2 Optimizations
+
+当前 NumPy runtime 做了几项学习型内核优化：
+
+The current NumPy runtime includes several learning-oriented kernel
+optimizations:
+
+1. RoPE sin/cos cache  
+   RoPE 的 sin/cos 只依赖位置、`head_dim` 和 `rope_theta`，所以 runtime 会按需
+   缓存 RoPE 表，decode 时复用，避免每层每步重复计算三角函数。
+
+   RoPE sin/cos values depend only on position, `head_dim`, and `rope_theta`, so
+   the runtime caches the table lazily and reuses it during decode.
+
+2. GQA without materialized K/V repeats  
+   Qwen2 这类 grouped-query attention 模型的 Q heads 多于 K/V heads。runtime
+   不再把 K/V 真的 `repeat` 到 Q head 数量，而是把 Q heads reshape 成分组，
+   让一组 Q heads 共享同一个 K/V head。
+
+   For grouped-query attention, the runtime no longer materializes repeated K/V
+   heads. It reshapes Q heads into groups so each group shares one K/V head.
+
+3. Reusable prefill attention masks  
+   Prefill 阶段同一个 causal mask 会被多层 Transformer block 重复使用。runtime
+   会缓存 `query_length > 1` 的 mask，decode 的单 token mask 仍走快速路径，避免
+   长期缓存大量不同位置的小 mask。
+
+   During prefill, the same causal mask is reused across layers. The runtime
+   caches masks for `query_length > 1`; single-token decode masks keep the fast
+   path to avoid accumulating many position-specific masks.
+
+这些优化主要降低局部 profile 指标，例如 `attention_rope_ms` 和
+`attention_gqa_ms`。整体 TTFT/TPOT 仍可能受 MLP、LM head、NumPy BLAS 调度、
+系统负载等因素主导。
+
+These optimizations mainly reduce local profile metrics such as
+`attention_rope_ms` and `attention_gqa_ms`. Overall TTFT/TPOT may still be
+dominated by MLP, LM head, NumPy BLAS scheduling, and system load.
