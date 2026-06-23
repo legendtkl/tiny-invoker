@@ -7,11 +7,13 @@ from tiny_invoker.cli import (
     benchmark_metric_stats,
     build_bench_gpt_neo_parser,
     build_bench_qwen2_parser,
+    build_bench_server_parser,
     build_compare_bench_parser,
     build_compare_gpt_neo_parser,
     build_compare_qwen2_parser,
     build_convert_safetensors_parser,
     build_generate_qwen2_parser,
+    distribution_stats,
     load_benchmark_jsonl,
 )
 
@@ -74,6 +76,17 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.candidate, Path("candidate.jsonl"))
         self.assertIn("ttft_ms", args.metrics)
 
+    def test_bench_server_parser_defaults(self) -> None:
+        parser = build_bench_server_parser()
+
+        args = parser.parse_args([])
+
+        self.assertEqual(args.url, "http://127.0.0.1:8000/generate")
+        self.assertEqual(args.max_new_tokens, 16)
+        self.assertEqual(args.requests, 8)
+        self.assertEqual(args.concurrency, 2)
+        self.assertFalse(args.json)
+
     def test_benchmark_metric_stats(self) -> None:
         stats = benchmark_metric_stats(
             "prefill_ms",
@@ -101,6 +114,13 @@ class CliTest(unittest.TestCase):
             records = load_benchmark_jsonl(path)
 
         self.assertEqual(records, [payload])
+
+    def test_distribution_stats(self) -> None:
+        stats = distribution_stats([1.0, 2.0, 3.0, 4.0])
+
+        self.assertEqual(stats["avg"], 2.5)
+        self.assertEqual(stats["p50"], 2.5)
+        self.assertAlmostEqual(stats["p95"], 3.85)
 
     def test_compare_gpt_neo_parser_defaults(self) -> None:
         parser = build_compare_gpt_neo_parser()

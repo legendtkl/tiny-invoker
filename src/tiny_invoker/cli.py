@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from http.client import HTTPConnection, HTTPSConnection
 import json
 import random
 from pathlib import Path
@@ -9,6 +11,7 @@ from statistics import mean, stdev
 import sys
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from tiny_invoker.demo import build_demo_engine
 from tiny_invoker.engine import GenerationConfig, InferenceEngine
@@ -359,6 +362,25 @@ def build_compare_bench_parser() -> argparse.ArgumentParser:
         default=",".join(DEFAULT_COMPARE_METRIC_NAMES),
         help="Comma-separated metric names to compare, or 'all'.",
     )
+    return parser
+
+
+def build_bench_server_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker bench-server",
+        description="Benchmark a running tiny-invoker HTTP /generate endpoint.",
+    )
+    parser.add_argument("--url", default="http://127.0.0.1:8000/generate")
+    parser.add_argument("--prompt", default="Once upon a time")
+    parser.add_argument("--max-new-tokens", type=int, default=16)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--requests", type=int, default=8)
+    parser.add_argument("--concurrency", type=int, default=2)
+    parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--json-output", type=Path, default=None)
     return parser
 
 
@@ -1026,6 +1048,139 @@ def run_compare_bench(argv: list[str]) -> int:
     return 0
 
 
+def run_bench_server(argv: list[str]) -> int:
+    parser = build_bench_server_parser()
+    args = parser.parse_args(argv)
+    if args.max_new_tokens < 0:
+        raise SystemExit("max_new_tokens must be non-negative.")
+    if args.requests <= 0:
+        raise SystemExit("requests must be positive.")
+    if args.concurrency <= 0:
+        raise SystemExit("concurrency must be positive.")
+    if args.timeout <= 0:
+        raise SystemExit("timeout must be positive.")
+
+    parsed_url = urlparse(args.url)
+    if parsed_url.scheme not in {"http", "https"}:
+        raise SystemExit("url must start with http:// or https://.")
+    if not parsed_url.hostname:
+        raise SystemExit("url must include a host.")
+
+    request_payload = {
+        "prompt": args.prompt,
+        "max_new_tokens": args.max_new_tokens,
+        "temperature": args.temperature,
+        "top_k": args.top_k if args.top_k > 0 else None,
+        "seed": args.seed,
+    }
+    wall_start = time.perf_counter()
+    rows: list[BenchmarkRow] = []
+    with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+        futures = [
+            executor.submit(
+                run_server_benchmark_request,
+                parsed_url,
+                request_payload,
+                args.timeout,
+            )
+            for _ in range(args.requests)
+        ]
+        for future in as_completed(futures):
+            rows.append(future.result())
+    wall_ms = elapsed_ms(wall_start)
+
+    payload = build_server_benchmark_json_payload(
+        args=args,
+        rows=rows,
+        wall_ms=wall_ms,
+    )
+    print("benchmark_name: http_server")
+    print(f"url: {args.url}")
+    print(f"requests: {args.requests}")
+    print(f"concurrency: {args.concurrency}")
+    print(f"prompt: {args.prompt!r}")
+    print(f"max_new_tokens: {args.max_new_tokens}")
+    print(f"temperature: {args.temperature}")
+    print(f"top_k: {request_payload['top_k']}")
+    print(f"streaming_metrics_supported: False")
+    for metric_name in payload["metrics"]:
+        metric_payload = payload["metrics"][metric_name]
+        if isinstance(metric_payload, dict):
+            print(f"{metric_name}_avg: {metric_payload.get('avg', 0.0):.4f}")
+            print(f"{metric_name}_p50: {metric_payload.get('p50', 0.0):.4f}")
+            print(f"{metric_name}_p95: {metric_payload.get('p95', 0.0):.4f}")
+    print(f"completed_requests: {payload['completed_requests']}")
+    print(f"failed_requests: {payload['failed_requests']}")
+    print(f"wall_ms: {payload['wall_ms']:.4f}")
+    print(f"requests_per_second: {payload['requests_per_second']:.4f}")
+    print(f"generated_tokens_per_second: {payload['generated_tokens_per_second']:.4f}")
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    if args.json_output is not None:
+        append_jsonl(args.json_output, payload)
+        print(f"json_output_file: {args.json_output}")
+    return 0
+
+
+def run_server_benchmark_request(
+    parsed_url: Any,
+    payload: dict[str, object],
+    timeout: float,
+) -> BenchmarkRow:
+    port = parsed_url.port
+    if port is None:
+        port = 443 if parsed_url.scheme == "https" else 80
+    connection_cls = HTTPSConnection if parsed_url.scheme == "https" else HTTPConnection
+    path = parsed_url.path or "/"
+    if parsed_url.query:
+        path = f"{path}?{parsed_url.query}"
+
+    connection = connection_cls(parsed_url.hostname, port, timeout=timeout)
+    start = time.perf_counter()
+    try:
+        connection.request(
+            "POST",
+            path,
+            body=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        time_to_first_byte_ms = elapsed_ms(start)
+        raw_body = response.read()
+        request_ms = elapsed_ms(start)
+        response_payload = json.loads(raw_body.decode("utf-8"))
+        usage = response_payload.get("usage") if isinstance(response_payload, dict) else {}
+        generated_tokens = (
+            usage.get("generated_tokens", 0)
+            if isinstance(usage, dict)
+            else 0
+        )
+        generated_tokens = int(generated_tokens)
+        return {
+            "status": response.status,
+            "request_ms": request_ms,
+            "time_to_first_byte_ms": time_to_first_byte_ms,
+            "generated_tokens": generated_tokens,
+            "non_streaming_tpot_ms": request_ms / generated_tokens if generated_tokens > 0 else 0.0,
+            "request_generated_tokens_per_second": (
+                generated_tokens / (request_ms / 1000.0) if request_ms > 0 else 0.0
+            ),
+        }
+    except Exception as error:
+        request_ms = elapsed_ms(start)
+        return {
+            "status": "error",
+            "request_ms": request_ms,
+            "time_to_first_byte_ms": request_ms,
+            "generated_tokens": 0,
+            "non_streaming_tpot_ms": 0.0,
+            "request_generated_tokens_per_second": 0.0,
+            "error": f"{type(error).__name__}: {error}",
+        }
+    finally:
+        connection.close()
+
+
 def load_hf_reference_gpt_neo_logits(args: argparse.Namespace, token_ids: list[int]) -> Any:
     try:
         import torch
@@ -1148,6 +1303,76 @@ def benchmark_payload_metrics(payload: dict[str, object]) -> dict[str, float]:
         if isinstance(avg, int | float):
             values[metric_name] = float(avg)
     return values
+
+
+def build_server_benchmark_json_payload(
+    args: argparse.Namespace,
+    rows: list[BenchmarkRow],
+    wall_ms: float,
+) -> dict[str, object]:
+    completed_rows = [row for row in rows if row.get("status") == 200]
+    failed_rows = [row for row in rows if row.get("status") != 200]
+    generated_tokens = sum(int(row.get("generated_tokens", 0)) for row in completed_rows)
+    wall_seconds = wall_ms / 1000.0
+    metrics = {
+        "request_ms": distribution_stats(float(row["request_ms"]) for row in completed_rows),
+        "time_to_first_byte_ms": distribution_stats(
+            float(row["time_to_first_byte_ms"]) for row in completed_rows
+        ),
+        "non_streaming_tpot_ms": distribution_stats(
+            float(row["non_streaming_tpot_ms"]) for row in completed_rows
+        ),
+        "request_generated_tokens_per_second": distribution_stats(
+            float(row["request_generated_tokens_per_second"]) for row in completed_rows
+        ),
+    }
+    return {
+        "benchmark_name": "http_server",
+        "url": args.url,
+        "prompt": args.prompt,
+        "max_new_tokens": args.max_new_tokens,
+        "temperature": args.temperature,
+        "top_k": args.top_k if args.top_k > 0 else None,
+        "requests": args.requests,
+        "concurrency": args.concurrency,
+        "streaming_metrics_supported": False,
+        "completed_requests": len(completed_rows),
+        "failed_requests": len(failed_rows),
+        "wall_ms": wall_ms,
+        "requests_per_second": len(completed_rows) / wall_seconds if wall_seconds > 0 else 0.0,
+        "generated_tokens_per_second": generated_tokens / wall_seconds if wall_seconds > 0 else 0.0,
+        "metrics": metrics,
+        "errors": [row.get("error") for row in failed_rows if "error" in row],
+    }
+
+
+def distribution_stats(values_iter: Any) -> dict[str, float]:
+    values = sorted(float(value) for value in values_iter)
+    if not values:
+        return {
+            "avg": 0.0,
+            "stdev": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+        }
+    return {
+        "avg": mean(values),
+        "stdev": stdev(values) if len(values) > 1 else 0.0,
+        "p50": percentile(values, 0.50),
+        "p95": percentile(values, 0.95),
+    }
+
+
+def percentile(sorted_values: list[float], fraction: float) -> float:
+    if not sorted_values:
+        return 0.0
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    index = (len(sorted_values) - 1) * fraction
+    lower = int(index)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    weight = index - lower
+    return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
 
 
 def percentage_delta(baseline: float, candidate: float) -> float | None:
@@ -1395,4 +1620,6 @@ def main(argv: list[str] | None = None) -> int:
         return run_compare_qwen2(args[1:])
     if args and args[0] == "compare-bench":
         return run_compare_bench(args[1:])
+    if args and args[0] == "bench-server":
+        return run_bench_server(args[1:])
     return run_generate(args)
