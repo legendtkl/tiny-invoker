@@ -17,6 +17,8 @@ from tiny_invoker.cli import (
     build_convert_safetensors_parser,
     build_generate_qwen2_parser,
     distribution_stats,
+    kv_cache_allocated_bytes,
+    kv_cache_capacity_tokens,
     load_benchmark_jsonl,
     run_compare_bench,
 )
@@ -207,6 +209,21 @@ class CliTest(unittest.TestCase):
         self.assertEqual(stats["avg"], 2.5)
         self.assertEqual(stats["p50"], 2.5)
         self.assertAlmostEqual(stats["p95"], 3.85)
+
+    def test_kv_cache_metric_helpers(self) -> None:
+        class Array:
+            def __init__(self, nbytes: int) -> None:
+                self.nbytes = nbytes
+
+        class Cache:
+            capacity = 16
+
+            def __init__(self) -> None:
+                self.keys = [Array(4)]
+                self.values = [Array(8)]
+
+        self.assertEqual(kv_cache_capacity_tokens(Cache()), 16.0)
+        self.assertEqual(kv_cache_allocated_bytes(Cache()), 12.0)
 
     def test_compare_gpt_neo_parser_defaults(self) -> None:
         parser = build_compare_gpt_neo_parser()

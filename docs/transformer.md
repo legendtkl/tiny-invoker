@@ -336,10 +336,21 @@ optimizations:
    caches masks for `query_length > 1`; single-token decode masks keep the fast
    path to avoid accumulating many position-specific masks.
 
+4. Dynamic KV cache capacity
+   KV cache 不再一开始就按 `max_position_embeddings` 分配完整长度，而是从较小
+   容量开始，随着 decode 长度按 2 倍扩容，直到模型最大上下文长度。这样更接近
+   serving 框架里的按需 KV 管理思想，可以降低短请求和小并发时的内存占用。
+
+   The KV cache no longer allocates the full `max_position_embeddings` length on
+   the first token. It starts with a small capacity and grows by powers of two
+   during decode until the model context limit. This mirrors the learning goal
+   behind demand-driven KV memory management in serving runtimes.
+
 这些优化主要降低局部 profile 指标，例如 `attention_rope_ms` 和
-`attention_gqa_ms`。整体 TTFT/TPOT 仍可能受 MLP、LM head、NumPy BLAS 调度、
-系统负载等因素主导。
+`attention_gqa_ms`，或者降低 KV cache 的内存占用。
+整体 TTFT/TPOT 仍可能受 MLP、LM head、NumPy BLAS 调度、系统负载等因素主导。
 
 These optimizations mainly reduce local profile metrics such as
-`attention_rope_ms` and `attention_gqa_ms`. Overall TTFT/TPOT may still be
-dominated by MLP, LM head, NumPy BLAS scheduling, and system load.
+`attention_rope_ms` and `attention_gqa_ms`, or reduce KV cache memory footprint.
+Overall TTFT/TPOT may still be dominated by MLP, LM head, NumPy BLAS scheduling,
+and system load.

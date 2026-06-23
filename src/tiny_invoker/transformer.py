@@ -378,10 +378,11 @@ class DecoderOnlyTransformer:
     ) -> Any:
         np = require_numpy()
         if past_cache is None:
+            capacity = self._kv_cache_capacity(end_position)
             cache = np.empty(
                 (
                     new_values.shape[0],
-                    self.config.max_position_embeddings,
+                    capacity,
                     new_values.shape[2],
                 ),
                 dtype=new_values.dtype,
@@ -389,10 +390,14 @@ class DecoderOnlyTransformer:
         elif past_cache.shape[1] >= end_position:
             cache = past_cache
         else:
+            capacity = self._kv_cache_capacity(
+                end_position,
+                current_capacity=int(past_cache.shape[1]),
+            )
             cache = np.empty(
                 (
                     past_cache.shape[0],
-                    self.config.max_position_embeddings,
+                    capacity,
                     past_cache.shape[2],
                 ),
                 dtype=past_cache.dtype,
@@ -401,6 +406,18 @@ class DecoderOnlyTransformer:
 
         cache[:, start_position:end_position, :] = new_values
         return cache
+
+    def _kv_cache_capacity(self, end_position: int, current_capacity: int = 0) -> int:
+        if end_position > self.config.max_position_embeddings:
+            raise ValueError(
+                f"KV cache end position {end_position} exceeds max_position_embeddings "
+                f"{self.config.max_position_embeddings}."
+            )
+        required_capacity = max(16, end_position)
+        if current_capacity > 0:
+            required_capacity = max(required_capacity, current_capacity * 2)
+        capacity = 1 << (required_capacity - 1).bit_length()
+        return min(capacity, self.config.max_position_embeddings)
 
     def _attention_mask(
         self,

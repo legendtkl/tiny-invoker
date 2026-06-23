@@ -118,6 +118,8 @@ This is the baseline command for optimization work. It prints:
   first generated token.
 - `model_decode_tokens_per_second`: decode forward-only throughput, excluding
   sampler time.
+- `kv_cache_capacity_tokens` and `kv_cache_allocated_mb`: final KV cache
+  allocation after the segmented generation run.
 - `end_to_end_ms` and `end_to_end_tokens_per_second`: full engine wall-clock
   generation cost.
 

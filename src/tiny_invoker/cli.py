@@ -64,6 +64,8 @@ SEGMENTED_BENCHMARK_METRIC_NAMES = (
     "tpot_ms",
     "decode_tokens_per_second",
     "model_decode_tokens_per_second",
+    "kv_cache_capacity_tokens",
+    "kv_cache_allocated_mb",
 )
 
 END_TO_END_BENCHMARK_METRIC_NAMES = (
@@ -1609,6 +1611,8 @@ def run_segmented_language_model_benchmark(
         "tpot_ms": tpot_ms,
         "decode_tokens_per_second": decode_tokens_per_second,
         "model_decode_tokens_per_second": model_decode_tokens_per_second,
+        "kv_cache_capacity_tokens": kv_cache_capacity_tokens(cache),
+        "kv_cache_allocated_mb": kv_cache_allocated_bytes(cache) / 1024.0 / 1024.0,
         "text": tokenizer.decode(generated_token_ids),
     }
     if profile:
@@ -1617,6 +1621,26 @@ def run_segmented_language_model_benchmark(
             decode_values = [profile_row.get(metric_name, 0.0) for profile_row in decode_profiles]
             row[f"profile_decode_{metric_name}"] = mean(decode_values) if decode_values else 0.0
     return row
+
+
+def kv_cache_capacity_tokens(cache: Any) -> float:
+    capacity = getattr(cache, "capacity", 0)
+    if isinstance(capacity, int | float):
+        return float(capacity)
+    return 0.0
+
+
+def kv_cache_allocated_bytes(cache: Any) -> float:
+    total = 0.0
+    for attribute_name in ("keys", "values"):
+        arrays = getattr(cache, attribute_name, ())
+        if not isinstance(arrays, (tuple, list)):
+            continue
+        for array in arrays:
+            nbytes = getattr(array, "nbytes", 0)
+            if isinstance(nbytes, int | float):
+                total += float(nbytes)
+    return total
 
 
 def run_profiled_forward(

@@ -41,6 +41,9 @@ Current checked-in runs:
 - `baseline/qwen2.jsonl`: initial Qwen2 baseline before P2 kernel work.
 - `optimized/qwen2-p2.jsonl`: after RoPE cache, grouped-query attention without
   materialized K/V repeats, and reusable prefill attention masks.
+- `optimized/qwen2-kv-dynamic.jsonl`: after dynamic KV cache capacity. The
+  checked-in short Qwen2 run ends with 16 cached token slots and about 0.73 MB
+  of allocated KV cache instead of allocating the full context window upfront.
 
 On the checked-in macOS run, P2 reduced the targeted local profile costs such
 as RoPE and GQA bookkeeping, while whole-request wall time was still dominated
