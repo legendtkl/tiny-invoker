@@ -108,6 +108,7 @@ class NumpyQwen2LanguageModelTest(unittest.TestCase):
             )
             self.assertIsInstance(model.transformer, DecoderOnlyTransformer)
             self.assertIsNone(model.transformer.weights.position_embedding)
+            self.assertIsNone(model.transformer._rope_cos_cache)
             prefill = model.forward(
                 ForwardInput(
                     token_ids=tokenizer.encode("a"),
@@ -130,6 +131,8 @@ class NumpyQwen2LanguageModelTest(unittest.TestCase):
 
         self.assertEqual(prefill.logits.shape, (tokenizer.vocab_size,))
         self.assertEqual(profiled_prefill.logits.shape, (tokenizer.vocab_size,))
+        self.assertIsNotNone(model.transformer._rope_cos_cache)
+        self.assertEqual(model.transformer._rope_cos_cache.shape, (1, 16, 2))
         self.assertIn("attention_ms", profile)
         self.assertIn("attention_qkv_proj_ms", profile)
         self.assertIn("attention_rope_ms", profile)

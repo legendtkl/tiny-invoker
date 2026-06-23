@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -95,6 +95,8 @@ class TransformerWeights:
 class DecoderOnlyTransformer:
     config: TransformerConfig
     weights: TransformerWeights
+    _rope_cos_cache: Any | None = field(default=None, init=False, repr=False)
+    _rope_sin_cache: Any | None = field(default=None, init=False, repr=False)
 
     def forward(
         self,
@@ -256,8 +258,8 @@ class DecoderOnlyTransformer:
         end_position = start_position + hidden_states.shape[0]
         if self.config.position_embedding == "rope":
             timer = profile_start(profile)
-            query = apply_rope(query, start_position=start_position, theta=self.config.rope_theta)
-            key = apply_rope(key, start_position=start_position, theta=self.config.rope_theta)
+            query = self._apply_rope(query, start_position=start_position)
+            key = self._apply_rope(key, start_position=start_position)
             profile_add(profile, "attention_rope_ms", timer)
         timer = profile_start(profile)
         key_cache = self._updated_kv_cache(
@@ -310,6 +312,43 @@ class DecoderOnlyTransformer:
         )
         profile_add(profile, "attention_output_proj_ms", timer)
         return output, key_cache, value_cache
+
+    def _apply_rope(self, hidden_states: Any, start_position: int) -> Any:
+        end_position = start_position + hidden_states.shape[1]
+        cos, sin = self._rope_cache(end_position=end_position)
+        return apply_rope_with_cache(
+            hidden_states,
+            cos[:, start_position:end_position, :],
+            sin[:, start_position:end_position, :],
+        )
+
+    def _rope_cache(self, end_position: int) -> tuple[Any, Any]:
+        head_dim = self.config.head_dim
+        if head_dim % 2 != 0:
+            raise ValueError("RoPE requires an even head dimension.")
+        if end_position > self.config.max_position_embeddings:
+            raise ValueError(
+                f"RoPE end position {end_position} exceeds max_position_embeddings "
+                f"{self.config.max_position_embeddings}."
+            )
+        current_capacity = (
+            0 if self._rope_cos_cache is None else int(self._rope_cos_cache.shape[1])
+        )
+        if (
+            self._rope_cos_cache is None
+            or self._rope_sin_cache is None
+            or current_capacity < end_position
+        ):
+            target_capacity = min(
+                self.config.max_position_embeddings,
+                max(end_position, current_capacity * 2 if current_capacity else 128),
+            )
+            self._rope_cos_cache, self._rope_sin_cache = build_rope_cache(
+                max_position=target_capacity,
+                head_dim=head_dim,
+                theta=self.config.rope_theta,
+            )
+        return self._rope_cos_cache, self._rope_sin_cache
 
     def _updated_kv_cache(
         self,
@@ -469,15 +508,24 @@ def repeat_key_value_heads(hidden_states: Any, repeat_count: int) -> Any:
 
 
 def apply_rope(hidden_states: Any, start_position: int, theta: float) -> Any:
-    np = require_numpy()
     head_dim = hidden_states.shape[-1]
     if head_dim % 2 != 0:
         raise ValueError("RoPE requires an even head dimension.")
-    positions = np.arange(
-        start_position,
-        start_position + hidden_states.shape[1],
-        dtype=np.float32,
+    cos, sin = build_rope_cache(
+        max_position=start_position + hidden_states.shape[1],
+        head_dim=head_dim,
+        theta=theta,
     )
+    return apply_rope_with_cache(
+        hidden_states,
+        cos[:, start_position : start_position + hidden_states.shape[1], :],
+        sin[:, start_position : start_position + hidden_states.shape[1], :],
+    )
+
+
+def build_rope_cache(max_position: int, head_dim: int, theta: float) -> tuple[Any, Any]:
+    np = require_numpy()
+    positions = np.arange(max_position, dtype=np.float32)
     inv_freq = 1.0 / (
         theta ** (np.arange(0, head_dim, 2, dtype=np.float32) / float(head_dim))
     )
@@ -485,6 +533,10 @@ def apply_rope(hidden_states: Any, start_position: int, theta: float) -> Any:
     rope_angles = np.concatenate([freqs, freqs], axis=-1)
     cos = np.cos(rope_angles)[None, :, :]
     sin = np.sin(rope_angles)[None, :, :]
+    return cos, sin
+
+
+def apply_rope_with_cache(hidden_states: Any, cos: Any, sin: Any) -> Any:
     return hidden_states * cos + rotate_half(hidden_states) * sin
 
 
