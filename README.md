@@ -1,18 +1,51 @@
 # tiny-invoker
 
-`tiny-invoker` is a learning-oriented model inference engine. The first version is intentionally small: it uses a character-level bigram language model so the whole inference path is easy to inspect.
+`tiny-invoker` is a from-scratch, learning-oriented LLM serving project. The
+goal is to build the core pieces of a model serving runtime step by step:
+tokenization, prefill/decode, sampling, Transformer execution, K/V cache,
+profiling, benchmarking, and a local HTTP serving layer.
+
+This is not a wrapper around vLLM, SGLang, llama.cpp, or Hugging Face
+`generate()`. Those systems are useful references, but this repository keeps the
+implementation small and explicit so the serving path can be read file by file.
+The early demo model is intentionally tiny, and the runtime has grown into a
+NumPy decoder-only Transformer path for GPT-Neo-style and Qwen2-style models.
+
+The project is for learning how serving engines work from the inside. It is not
+intended to be production-fast yet.
+
+## Serving From Scratch
+
+The repo builds a minimal serving stack in layers:
+
+1. `interfaces.py`: a tiny model contract with `prefill` and `decode` modes.
+2. `engine.py`: the autoregressive generation loop.
+3. `sampler.py`: logits, softmax, top-k filtering, and token selection.
+4. `transformer.py`: a decoder-only Transformer runtime with attention, MLP,
+   RoPE, RMSNorm, grouped-query attention, and K/V cache.
+5. `gpt_neo.py` and `qwen2.py`: model adapters that map Hugging Face weights
+   into the shared runtime.
+6. `server.py`: a small local HTTP `/generate` endpoint.
+7. `bench-*` commands: profile and compare serving behavior before and after
+   optimizations.
+
+The intended learning loop is: implement one serving concept, run a real small
+model, inspect profile output, optimize one bottleneck, and compare again.
 
 ## Design Constraints
 
 - Runs on macOS with the system `python3`.
-- Keeps the core demo simple; real Hugging Face tokenizers use the small `tokenizers` dependency.
-- Uses optional `numpy` and `torch` only for weight inspection and later weight conversion.
+- Keeps the core demo simple; real Hugging Face tokenizers use the small
+  `tokenizers` dependency.
+- Uses optional `numpy`, `torch`, and `safetensors` for local runtime,
+  comparison, and weight conversion.
 - Keeps the repository small enough to read file by file.
-- Optimizes for learning the inference loop before adding fast tensor libraries.
+- Optimizes for understanding serving internals before adding production-grade
+  kernels, batching, or GPU execution.
 
 ## What This Version Teaches
 
-The core loop of most text-generation inference engines is:
+The core loop of most text-generation serving engines is:
 
 1. Tokenize input text into token ids.
 2. Run prefill over the prompt to prepare reusable state.
