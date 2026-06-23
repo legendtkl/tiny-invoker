@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 import unittest
 from http.client import HTTPConnection
 
@@ -42,6 +43,7 @@ class ServerTest(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
+            wait_for_http_server("127.0.0.1", server.server_address[1])
             conn = HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
             conn.request(
                 "POST",
@@ -59,6 +61,25 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["text"], "bcaa")
         self.assertEqual(payload["usage"]["generated_tokens"], 2)
+
+
+def wait_for_http_server(host: str, port: int) -> None:
+    deadline = time.monotonic() + 5.0
+    last_error: OSError | None = None
+    while time.monotonic() < deadline:
+        conn = HTTPConnection(host, port, timeout=1)
+        try:
+            conn.request("GET", "/health")
+            response = conn.getresponse()
+            response.read()
+            if response.status == 200:
+                return
+        except OSError as error:
+            last_error = error
+        finally:
+            conn.close()
+        time.sleep(0.05)
+    raise AssertionError(f"HTTP server did not become ready: {last_error}")
 
 
 if __name__ == "__main__":

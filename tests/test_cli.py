@@ -3,6 +3,7 @@ import unittest
 from tiny_invoker.cli import (
     benchmark_metric_stats,
     build_bench_gpt_neo_parser,
+    build_bench_qwen2_parser,
     build_compare_gpt_neo_parser,
     build_compare_qwen2_parser,
     build_convert_safetensors_parser,
@@ -35,6 +36,20 @@ class CliTest(unittest.TestCase):
 
         self.assertTrue(args.profile)
         self.assertTrue(args.json)
+
+    def test_bench_qwen2_parser_defaults(self) -> None:
+        parser = build_bench_qwen2_parser()
+
+        args = parser.parse_args(["Qwen/Qwen2.5-0.5B", "Hello"])
+
+        self.assertEqual(args.model_id, "Qwen/Qwen2.5-0.5B")
+        self.assertEqual(args.prompt, "Hello")
+        self.assertEqual(args.weights_file, "model.npz")
+        self.assertEqual(args.max_new_tokens, 128)
+        self.assertEqual(args.temperature, 0.0)
+        self.assertEqual(args.top_k, 20)
+        self.assertFalse(args.profile)
+        self.assertFalse(args.json)
 
     def test_benchmark_metric_stats(self) -> None:
         stats = benchmark_metric_stats(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 import random
 from pathlib import Path
@@ -56,6 +57,7 @@ END_TO_END_BENCHMARK_METRIC_NAMES = (
 
 BenchmarkValue = float | int | str
 BenchmarkRow = dict[str, BenchmarkValue]
+ModelLoader = Callable[[argparse.Namespace], tuple[Any, HfTokenizer, dict[str, Path]]]
 
 
 def build_generate_parser() -> argparse.ArgumentParser:
@@ -209,6 +211,18 @@ def build_serve_gpt_neo_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def add_benchmark_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--repeats", type=int, default=2)
+    parser.add_argument("--warmups", type=int, default=1)
+    parser.add_argument("--sample-chars", type=int, default=500)
+    parser.add_argument("--profile", action="store_true", help="Print internal prefill/decode forward timing.")
+    parser.add_argument("--json", action="store_true", help="Print a machine-readable JSON summary after text output.")
+
+
 def build_bench_gpt_neo_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tiny-invoker bench-gpt-neo",
@@ -222,15 +236,24 @@ def build_bench_gpt_neo_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weights-file", default="pytorch_model.npz")
     parser.add_argument("--weights-path", type=Path, default=None)
     parser.add_argument("--config-file", default="config.json")
-    parser.add_argument("--max-new-tokens", type=int, default=128)
-    parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--top-k", type=int, default=20)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--repeats", type=int, default=2)
-    parser.add_argument("--warmups", type=int, default=1)
-    parser.add_argument("--sample-chars", type=int, default=500)
-    parser.add_argument("--profile", action="store_true", help="Print internal prefill/decode forward timing.")
-    parser.add_argument("--json", action="store_true", help="Print a machine-readable JSON summary after text output.")
+    add_benchmark_arguments(parser)
+    return parser
+
+
+def build_bench_qwen2_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tiny-invoker bench-qwen2",
+        description="Benchmark the NumPy Qwen2 runtime with segmented timing.",
+    )
+    parser.add_argument("model_id", help="Hugging Face model id, for example Qwen/Qwen2.5-0.5B.")
+    parser.add_argument("prompt", help="Prompt text.")
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--endpoint", default="https://huggingface.co")
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--weights-file", default="model.npz")
+    parser.add_argument("--weights-path", type=Path, default=None)
+    parser.add_argument("--config-file", default="config.json")
+    add_benchmark_arguments(parser)
     return parser
 
 
@@ -675,6 +698,28 @@ def run_serve_gpt_neo(argv: list[str]) -> int:
 def run_bench_gpt_neo(argv: list[str]) -> int:
     parser = build_bench_gpt_neo_parser()
     args = parser.parse_args(argv)
+    return run_language_model_benchmark(
+        args=args,
+        benchmark_name="gpt_neo_runtime",
+        load_model=load_numpy_gpt_neo_model,
+    )
+
+
+def run_bench_qwen2(argv: list[str]) -> int:
+    parser = build_bench_qwen2_parser()
+    args = parser.parse_args(argv)
+    return run_language_model_benchmark(
+        args=args,
+        benchmark_name="qwen2_runtime",
+        load_model=load_numpy_qwen2_model,
+    )
+
+
+def run_language_model_benchmark(
+    args: argparse.Namespace,
+    benchmark_name: str,
+    load_model: ModelLoader,
+) -> int:
     if args.max_new_tokens < 0:
         raise SystemExit("max_new_tokens must be non-negative.")
     if args.repeats <= 0:
@@ -683,14 +728,14 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
         raise SystemExit("warmups must be non-negative.")
 
     load_start = time.perf_counter()
-    model, tokenizer, _ = load_numpy_gpt_neo_model(args)
+    model, tokenizer, _ = load_model(args)
     load_ms = elapsed_ms(load_start)
     engine = InferenceEngine(model=model)
     top_k = args.top_k if args.top_k > 0 else None
     prompt_token_ids = tokenizer.encode(args.prompt)
 
     for _ in range(args.warmups):
-        run_segmented_gpt_neo_benchmark(
+        run_segmented_language_model_benchmark(
             model=model,
             tokenizer=tokenizer,
             prompt_token_ids=prompt_token_ids,
@@ -700,7 +745,7 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
             seed=args.seed,
             profile=args.profile,
         )
-        run_end_to_end_gpt_neo_benchmark(
+        run_end_to_end_language_model_benchmark(
             engine=engine,
             prompt=args.prompt,
             max_new_tokens=args.max_new_tokens,
@@ -710,7 +755,7 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
         )
 
     segmented_rows = [
-        run_segmented_gpt_neo_benchmark(
+        run_segmented_language_model_benchmark(
             model=model,
             tokenizer=tokenizer,
             prompt_token_ids=prompt_token_ids,
@@ -723,7 +768,7 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
         for _ in range(args.repeats)
     ]
     end_to_end_rows = [
-        run_end_to_end_gpt_neo_benchmark(
+        run_end_to_end_language_model_benchmark(
             engine=engine,
             prompt=args.prompt,
             max_new_tokens=args.max_new_tokens,
@@ -734,7 +779,7 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
         for _ in range(args.repeats)
     ]
 
-    print("benchmark_name: gpt_neo_runtime")
+    print(f"benchmark_name: {benchmark_name}")
     print(f"model_id: {args.model_id}")
     print(f"prompt: {args.prompt!r}")
     print(f"prompt_tokens: {len(prompt_token_ids)}")
@@ -760,6 +805,7 @@ def run_bench_gpt_neo(argv: list[str]) -> int:
     if args.json:
         payload = build_benchmark_json_payload(
             args=args,
+            benchmark_name=benchmark_name,
             top_k=top_k,
             prompt_token_count=len(prompt_token_ids),
             load_ms=load_ms,
@@ -992,8 +1038,8 @@ def elapsed_ms(start_time: float) -> float:
     return (time.perf_counter() - start_time) * 1000.0
 
 
-def run_segmented_gpt_neo_benchmark(
-    model: NumpyGptNeoLanguageModel,
+def run_segmented_language_model_benchmark(
+    model: Any,
     tokenizer: HfTokenizer,
     prompt_token_ids: list[int],
     max_new_tokens: int,
@@ -1097,7 +1143,7 @@ def run_segmented_gpt_neo_benchmark(
 
 
 def run_profiled_forward(
-    model: NumpyGptNeoLanguageModel,
+    model: Any,
     request: ForwardInput,
     profile: bool,
 ) -> tuple[Any, dict[str, float]]:
@@ -1106,7 +1152,7 @@ def run_profiled_forward(
     return model.forward(request), {}
 
 
-def run_end_to_end_gpt_neo_benchmark(
+def run_end_to_end_language_model_benchmark(
     engine: InferenceEngine,
     prompt: str,
     max_new_tokens: int,
@@ -1152,6 +1198,7 @@ def print_benchmark_metric(name: str, rows: list[BenchmarkRow]) -> None:
 
 def build_benchmark_json_payload(
     args: argparse.Namespace,
+    benchmark_name: str,
     top_k: int | None,
     prompt_token_count: int,
     load_ms: float,
@@ -1175,7 +1222,7 @@ def build_benchmark_json_payload(
         metrics[metric_name] = benchmark_metric_stats(metric_name, rows)
 
     return {
-        "benchmark_name": "gpt_neo_runtime",
+        "benchmark_name": benchmark_name,
         "model_id": args.model_id,
         "prompt": args.prompt,
         "prompt_tokens": prompt_token_count,
@@ -1216,6 +1263,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_serve_gpt_neo(args[1:])
     if args and args[0] == "bench-gpt-neo":
         return run_bench_gpt_neo(args[1:])
+    if args and args[0] == "bench-qwen2":
+        return run_bench_qwen2(args[1:])
     if args and args[0] == "compare-gpt-neo":
         return run_compare_gpt_neo(args[1:])
     if args and args[0] == "compare-qwen2":

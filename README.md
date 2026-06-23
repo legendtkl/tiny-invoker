@@ -143,8 +143,13 @@ safetensors weights:
 ```bash
 PYTHONPATH=src python3 -m tiny_invoker probe-qwen2 Qwen/Qwen2.5-0.5B "Hello"
 PYTHONPATH=src python3 -m tiny_invoker generate-qwen2 Qwen/Qwen2.5-0.5B "Hello" --max-new-tokens 8 --temperature 0
+PYTHONPATH=src python3 -m tiny_invoker bench-qwen2 Qwen/Qwen2.5-0.5B "Hello" --max-new-tokens 8 --temperature 0 --profile --json
 PYTHONPATH=src python3 -m tiny_invoker compare-qwen2 Qwen/Qwen2.5-0.5B "Hello" --top-k 10
 ```
+
+`bench-qwen2` uses the same baseline metrics as `bench-gpt-neo`, but runs
+through the Qwen2 adapter with RoPE, RMSNorm, SwiGLU MLP, and grouped-query
+attention.
 
 Serve the NumPy GPT-Neo runtime locally:
 
