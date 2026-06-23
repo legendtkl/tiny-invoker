@@ -1231,7 +1231,7 @@ def load_hf_reference_gpt_neo_logits(args: argparse.Namespace, token_ids: list[i
     input_ids = torch.tensor([token_ids], dtype=torch.long)
     with torch.no_grad():
         output = reference_model(input_ids=input_ids)
-    return output.logits[0, -1].detach().cpu().numpy()
+    return output.logits[0, -1].detach().float().cpu().numpy()
 
 
 def load_hf_reference_qwen2_logits(args: argparse.Namespace, token_ids: list[int]) -> Any:
@@ -1271,7 +1271,7 @@ def load_hf_reference_qwen2_logits(args: argparse.Namespace, token_ids: list[int
     input_ids = torch.tensor([token_ids], dtype=torch.long)
     with torch.no_grad():
         output = reference_model(input_ids=input_ids)
-    return output.logits[0, -1].detach().cpu().numpy()
+    return output.logits[0, -1].detach().float().cpu().numpy()
 
 
 def top_token_ids(logits: Any, top_k: int) -> list[int]:

@@ -227,7 +227,6 @@ class DecoderOnlyTransformer:
         past_value: Any | None,
         profile: dict[str, float] | None = None,
     ) -> tuple[Any, Any, Any]:
-        np = require_numpy()
         attention_weights = layer_weights.attention
         timer = profile_start(profile)
         query = split_heads(
@@ -278,14 +277,24 @@ class DecoderOnlyTransformer:
         key = key_cache[:, :end_position, :]
         value = value_cache[:, :end_position, :]
         timer = profile_start(profile)
-        key = repeat_key_value_heads(key, self.config.key_value_group_size)
-        value = repeat_key_value_heads(value, self.config.key_value_group_size)
+        group_size = self.config.key_value_group_size
+        if group_size > 1:
+            query = query.reshape(
+                self.config.key_value_heads,
+                group_size,
+                query.shape[1],
+                query.shape[2],
+            )
         profile_add(profile, "attention_gqa_ms", timer)
 
         timer = profile_start(profile)
-        scores = query @ np.swapaxes(key, -1, -2)
-        if self.config.scale_attention_scores:
-            scores = scores / np.sqrt(self.config.head_dim)
+        scores = grouped_query_attention_scores(
+            query=query,
+            key=key,
+            group_size=group_size,
+            scale_attention_scores=self.config.scale_attention_scores,
+            head_dim=self.config.head_dim,
+        )
         profile_add(profile, "attention_qk_matmul_ms", timer)
         timer = profile_start(profile)
         mask = self._attention_mask(
@@ -301,7 +310,11 @@ class DecoderOnlyTransformer:
         probabilities = softmax(scores, axis=-1)
         profile_add(profile, "attention_softmax_ms", timer)
         timer = profile_start(profile)
-        context = probabilities @ value
+        context = grouped_query_attention_context(
+            probabilities=probabilities,
+            value=value,
+            group_size=group_size,
+        )
         profile_add(profile, "attention_av_matmul_ms", timer)
         timer = profile_start(profile)
         merged_context = merge_heads(context)
@@ -498,6 +511,37 @@ def split_heads(hidden_states: Any, num_heads: int) -> Any:
 def merge_heads(hidden_states: Any) -> Any:
     num_heads, sequence_length, head_dim = hidden_states.shape
     return hidden_states.transpose(1, 0, 2).reshape(sequence_length, num_heads * head_dim)
+
+
+def grouped_query_attention_scores(
+    query: Any,
+    key: Any,
+    group_size: int,
+    scale_attention_scores: bool,
+    head_dim: int,
+) -> Any:
+    np = require_numpy()
+    if group_size == 1:
+        scores = query @ np.swapaxes(key, -1, -2)
+    else:
+        scores = query @ np.swapaxes(key, -1, -2)[:, None, :, :]
+        scores = scores.reshape(key.shape[0] * group_size, query.shape[2], key.shape[1])
+    if scale_attention_scores:
+        scores = scores / np.sqrt(head_dim)
+    return scores
+
+
+def grouped_query_attention_context(probabilities: Any, value: Any, group_size: int) -> Any:
+    if group_size == 1:
+        return probabilities @ value
+    grouped_probabilities = probabilities.reshape(
+        value.shape[0],
+        group_size,
+        probabilities.shape[1],
+        probabilities.shape[2],
+    )
+    context = grouped_probabilities @ value[:, None, :, :]
+    return context.reshape(value.shape[0] * group_size, probabilities.shape[1], value.shape[2])
 
 
 def repeat_key_value_heads(hidden_states: Any, repeat_count: int) -> Any:
